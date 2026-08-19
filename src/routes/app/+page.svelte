@@ -429,6 +429,7 @@
 		color: var(--color-text-muted);
 		margin-top: var(--space-2);
 		line-height: 1.5;
+		white-space: pre-wrap;
 	}
 
 	.feed-meta {

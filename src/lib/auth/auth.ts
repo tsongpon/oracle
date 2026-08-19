@@ -49,6 +49,20 @@ export interface RegisterRequest {
 	title?: string;
 	email: string;
 	password: string;
+	invite_token?: string;
+}
+
+export interface CreateInvitationRequest {
+	organization_name: string;
+}
+
+export interface InvitationResponse {
+	token: string;
+	id: string;
+	created_by: string;
+	organization_name: string;
+	created_at: string; // ISO 8601
+	expires_at: string; // ISO 8601
 }
 
 export interface ApiError {
@@ -57,7 +71,7 @@ export interface ApiError {
 
 // --- Feedback domain types (drop-in from OpenAPI §components/schemas) ---
 
-export type FeedbackVisibility = 'public' | 'private' | 'manager_only';
+export type FeedbackVisibility = 'anonymous' | 'named';
 
 export interface FeedbackPeriod {
 	id: string;
@@ -124,6 +138,7 @@ export type AuthErrorCode =
 	| 'email_taken' // 409 on /register
 	| 'bad_request' // 400 (validation / malformed)
 	| 'unauthorized' // 401 from /v1/me
+	| 'forbidden' // 403 (not an org admin, etc.)
 	| 'employee_not_found' // 404 from /v1/me
 	| 'network' // fetch threw
 	| 'server' // 5xx
@@ -205,6 +220,9 @@ async function request<T>(
 		if (res.status === 403 && path === '/login') {
 			throw new ApiClientError(message, 403, 'email_not_verified');
 		}
+		if (res.status === 403) {
+			throw new ApiClientError(message, 403, 'forbidden');
+		}
 		if (res.status === 409 && path === '/register') {
 			throw new ApiClientError(message, 409, 'email_taken');
 		}
@@ -243,6 +261,13 @@ export async function getMe(token: string): Promise<Employee> {
 
 export async function register(payload: RegisterRequest): Promise<Employee> {
 	return request<Employee>('/register', { method: 'POST', body: payload });
+}
+
+export async function createInvitation(
+	token: string,
+	payload: CreateInvitationRequest
+): Promise<InvitationResponse> {
+	return request<InvitationResponse>('/invitation', { method: 'POST', body: payload, token });
 }
 
 // --- Feedback endpoints ---

@@ -2,6 +2,7 @@
 	import { auth } from '$lib/auth.svelte';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 
 	let { children } = $props();
 
@@ -14,6 +15,22 @@
 		{ href: '/app/cycles', label: 'Cycles', icon: 'cycle' },
 		{ href: '/app/reports', label: 'Reports', icon: 'chart' }
 	];
+
+	const adminNavItems = $derived(
+		auth.user?.role === 'org_admin'
+			? [{ href: '/app/invitations', label: 'Invitations', icon: 'invite' }]
+			: []
+	);
+
+	const titleMap: Record<string, string> = {
+		'/app': 'Dashboard',
+		'/app/feedback': 'My Feedback',
+		'/app/team': 'Team',
+		'/app/cycles': 'Cycles',
+		'/app/reports': 'Reports',
+		'/app/invitations': 'Invitations'
+	};
+	const topbarTitle = $derived(titleMap[page.url.pathname] ?? 'Dashboard');
 
 	onMount(() => {
 		if (!auth.isAuthenticated) {
@@ -67,7 +84,7 @@
 					<a
 						href={item.href}
 						class="nav-item"
-						class:active={item.href === '/app'}
+						class:active={page.url.pathname === item.href}
 						onclick={() => (menuOpen = false)}
 					>
 						<span class="nav-icon" aria-hidden="true">
@@ -99,6 +116,24 @@
 						<span class="nav-label">{item.label}</span>
 					</a>
 				{/each}
+
+				{#if adminNavItems.length > 0}
+					<div class="nav-section-label">Admin</div>
+					{#each adminNavItems as item}
+						<a
+							href={item.href}
+							class="nav-item"
+							onclick={() => (menuOpen = false)}
+						>
+							<span class="nav-icon" aria-hidden="true">
+								<svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+									<path d="M3.2 8a15.3 15.3 0 010 8M6.4 6.2a11.4 11.4 0 010 11.6M9.6 4.4a7.5 7.5 0 010 15.2M20 12a15.3 15.3 0 01-.55 4M16.8 6.2a11.4 11.4 0 010 11.6M13.6 4.4a7.5 7.5 0 010 15.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+								</svg>
+							</span>
+							<span class="nav-label">{item.label}</span>
+						</a>
+					{/each}
+				{/if}
 			</nav>
 
 			<div class="sidebar-foot">
@@ -135,7 +170,7 @@
 						<path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
 					</svg>
 				</button>
-				<div class="topbar-title">Dashboard</div>
+				<div class="topbar-title">{topbarTitle}</div>
 				<div class="topbar-spacer"></div>
 				<button class="btn btn-primary" onclick={() => goto('/app/feedback/new')}>
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="none">
@@ -215,6 +250,16 @@
 		gap: 2px;
 		flex: 1;
 		overflow-y: auto;
+	}
+
+	.nav-section-label {
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--color-text-subtle);
+		padding: var(--space-4) var(--space-3) var(--space-1);
+		margin-top: var(--space-2);
 	}
 
 	.nav-item {

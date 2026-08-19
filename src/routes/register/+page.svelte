@@ -18,9 +18,63 @@
 	let accountExists = $state(false);
 	let registeredEmail = $state<string | null>(null);
 
+	// --- Invitation token (link = /register?token=...) ---
+	let inviteToken = $state<string | null>(null);
+	let inviteOrgName = $state<string | null>(null);
+	let inviteExpired = $state(false);
+	let inviteError = $state<string | null>(null);
+
+	// Decode a JWT payload (client-side, for display ONLY — the server
+	// verifies the signature on submit). Returns null on malformed input.
+	function decodeJwtPayload(token: string): Record<string, unknown> | null {
+		const parts = token.split('.');
+		if (parts.length < 2) return null;
+		let payload = parts[1];
+		payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+		switch (payload.length % 4) {
+			case 0:
+				break;
+			case 2:
+				payload += '==';
+				break;
+			case 3:
+				payload += '=';
+				break;
+			default:
+				return null;
+		}
+		try {
+			const json = atob(payload);
+			return JSON.parse(decodeURIComponent(escape(json)));
+		} catch {
+			return null;
+		}
+	}
+
 	onMount(() => {
 		if (auth.isAuthenticated) {
 			goto('/app', { replaceState: true });
+			return;
+		}
+		if (typeof window !== 'undefined') {
+			const params = new URLSearchParams(window.location.search);
+			const token = params.get('token');
+			if (token) {
+				inviteToken = token;
+				const payload = decodeJwtPayload(token);
+				if (payload && typeof payload.organization_name === 'string') {
+					inviteOrgName = payload.organization_name;
+					organizationName = inviteOrgName;
+					// Optional client-side expired hint (server is authoritative).
+					if (typeof payload.exp === 'number') {
+						const expMs = payload.exp * 1000;
+						if (Date.now() >= expMs) inviteExpired = true;
+					}
+				} else {
+					// Malformed token: surface as expired/invalid so the user asks for a new link.
+					inviteExpired = true;
+				}
+			}
 		}
 	});
 
@@ -29,7 +83,12 @@
 	function validate(): FieldErrors {
 		const errs: FieldErrors = {};
 		if (!name.trim()) errs.name = 'name is required';
-		if (!organizationName.trim()) errs.organization_name = 'organization_name is required';
+		// When registering with an invitation the server supplies the
+		// organization_name (taken from the verified JWT), so we skip the
+		// client-side required check for it.
+		if (!inviteToken && !organizationName.trim()) {
+			errs.organization_name = 'organization_name is required';
+		}
 		if (!email.trim()) {
 			errs.email = 'email is required';
 		} else if (!EMAIL_RE.test(email.trim())) {
@@ -76,7 +135,8 @@
 				organization_name: organizationName.trim(),
 				title: title.trim() || undefined,
 				email: email.trim(),
-				password
+				password,
+				invite_token: inviteToken ?? undefined
 			});
 			// Do NOT auto-login. Show "check your email" state.
 			registeredEmail = employee.email;
@@ -90,6 +150,15 @@
 					case 'bad_request':
 						if (err.message === 'invalid request body' || err.message === '') {
 							formError = 'Please check your input and try again.';
+						} else if (
+							inviteToken &&
+							err.message.toLowerCase().includes('invitation')
+						) {
+							// Server rejected the invitation token (invalid/expired).
+							inviteError =
+								err.message ||
+								'Your invitation link is invalid or has expired. Ask your administrator for a new link.';
+							formError = inviteError;
 						} else {
 							// Verbatim server validation message(s) mapped to fields.
 							const mapped = mapServerMessageToField(err.message);
@@ -178,11 +247,30 @@
 		{:else}
 			<form class="auth-card" onsubmit={handleSubmit} novalidate>
 				<div class="auth-card-head">
-					<h1>Create your account</h1>
-					<p>Sign up for your 360 Feedback workspace.</p>
+					{#if inviteToken && inviteOrgName}
+						<h1>Join {inviteOrgName}</h1>
+						<p>You've been invited to join {inviteOrgName} on 360 Feedback. Create your account below.</p>
+					{:else}
+						<h1>Create your account</h1>
+						<p>Sign up for your 360 Feedback workspace.</p>
+					{/if}
 				</div>
 
-				{#if formError}
+				{#if inviteToken && inviteExpired}
+					<div class="alert" role="alert">
+						<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+							<path
+								d="M10 1.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17zM10 6v5M10 14.5v.5"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linecap="round"
+							/>
+						</svg>
+						<span>Your invitation link has expired or is invalid. Ask your administrator for a new link.</span>
+					</div>
+				{/if}
+
+				{#if formError && !(inviteToken && inviteExpired)}
 					<div class="alert" class:alert-warning={accountExists} role="alert">
 						<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
 							<path
@@ -219,24 +307,30 @@
 					{/if}
 				</div>
 
-				<div class="field">
-					<label class="field-label" for="organization_name">Organization</label>
-					<input
-						id="organization_name"
-						class="input"
-						type="text"
-						placeholder="Acme Inc."
-						bind:value={organizationName}
-						oninput={() => clearFieldError('organization_name')}
-						aria-invalid={!!fieldErrors.organization_name}
-						aria-describedby={fieldErrors.organization_name ? 'org-error' : undefined}
-						disabled={submitting}
-						required
-					/>
-					{#if fieldErrors.organization_name}
-						<span id="org-error" class="field-error">{fieldErrors.organization_name}</span>
+			<div class="field">
+				<label class="field-label" for="organization_name">
+					Organization
+					{#if inviteToken}
+						<span class="field-optional">(set by invitation)</span>
 					{/if}
-				</div>
+				</label>
+				<input
+					id="organization_name"
+					class="input"
+					type="text"
+					placeholder="Acme Inc."
+					bind:value={organizationName}
+					oninput={() => clearFieldError('organization_name')}
+					aria-invalid={!!fieldErrors.organization_name}
+					aria-describedby={fieldErrors.organization_name ? 'org-error' : undefined}
+					disabled={submitting || !!inviteToken}
+					readonly={!!inviteToken}
+					required
+				/>
+				{#if fieldErrors.organization_name}
+					<span id="org-error" class="field-error">{fieldErrors.organization_name}</span>
+				{/if}
+			</div>
 
 				<div class="field">
 					<label class="field-label" for="title">
@@ -326,14 +420,16 @@
 					{/if}
 				</div>
 
-				<button type="submit" class="btn btn-primary btn-block" disabled={submitting}>
-					{#if submitting}
-						<span class="spinner" aria-hidden="true"></span>
-						Creating account…
-					{:else}
-						Create account
-					{/if}
-				</button>
+			<button type="submit" class="btn btn-primary btn-block" disabled={submitting}>
+				{#if submitting}
+					<span class="spinner" aria-hidden="true"></span>
+					Creating account…
+				{:else if inviteToken}
+					Join {inviteOrgName ?? 'organization'}
+				{:else}
+					Create account
+				{/if}
+			</button>
 			</form>
 		{/if}
 

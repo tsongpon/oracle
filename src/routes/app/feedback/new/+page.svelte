@@ -30,9 +30,8 @@
 	];
 
 	const VISIBILITY_OPTIONS: { value: FeedbackVisibility; label: string; desc: string }[] = [
-		{ value: 'private', label: 'Private', desc: 'Only you and managers can see this' },
-		{ value: 'manager_only', label: 'Manager only', desc: 'Visible to the reviewee\'s manager' },
-		{ value: 'public', label: 'Public', desc: 'Shared with the reviewee and the team' }
+		{ value: 'named', label: 'Named', desc: 'Your name is shown with this feedback' },
+		{ value: 'anonymous', label: 'Anonymous', desc: 'Your identity is hidden from the reviewee' }
 	];
 
 	let employees = $state<Employee[]>([]);
@@ -52,14 +51,14 @@
 	});
 	let strengthsComment = $state('');
 	let weaknessesComment = $state('');
-	let visibility = $state<FeedbackVisibility>('private');
+	let visibility = $state<FeedbackVisibility>('anonymous');
 
 	let submitting = $state(false);
 	let formError = $state<string | null>(null);
 	let submitted = $state(false);
 
 	type FieldErrors = Partial<
-		Record<'period_id' | 'reviewee_id' | ScoreField | 'form', string>
+		Record<'period_id' | 'reviewee_id' | ScoreField | 'strengths_comment' | 'weaknesses_comment' | 'form', string>
 	>;
 	let fieldErrors = $state<FieldErrors>({});
 
@@ -131,6 +130,12 @@
 				errs[f.key] = 'Pick a score from 1 to 5.';
 			}
 		}
+		if (!strengthsComment.trim()) {
+			errs.strengths_comment = 'Please share what this person does well.';
+		}
+		if (!weaknessesComment.trim()) {
+			errs.weaknesses_comment = 'Please share where this person could grow.';
+		}
 		return errs;
 	}
 
@@ -149,6 +154,10 @@
 			} else {
 				errs.reviewee_id = 'Choose a colleague to review.';
 			}
+		} else if (m.includes('strengths_comment') || m.includes('strengths')) {
+			errs.strengths_comment = 'Please share what this person does well.';
+		} else if (m.includes('weaknesses_comment') || m.includes('weaknesses')) {
+			errs.weaknesses_comment = 'Please share where this person could grow.';
 		} else {
 			for (const f of SCORE_FIELDS) {
 				if (m.includes(f.key)) {
@@ -186,8 +195,8 @@
 				collaboration_score: scores.collaboration_score,
 				delivery_score: scores.delivery_score,
 				trust_score: scores.trust_score,
-				strengths_comment: strengthsComment.trim(),
-				weaknesses_comment: weaknessesComment.trim(),
+				strengths_comment: strengthsComment.replace(/^\s+|\s+$/g, ''),
+				weaknesses_comment: weaknessesComment.replace(/^\s+|\s+$/g, ''),
 				visibility
 			});
 			submitted = true;
@@ -315,7 +324,7 @@
 							delivery_score: 0,
 							trust_score: 0
 						};
-						visibility = 'private';
+						visibility = 'anonymous';
 						fieldErrors = {};
 						formError = null;
 					}}
@@ -468,36 +477,46 @@
 			</div>
 
 			<div class="section-divider">Comments</div>
-			<p class="section-sub">Optional but encouraged — specifics make feedback actionable.</p>
+			<p class="section-sub">Specifics make feedback actionable — both fields are required.</p>
 
 			<div class="field">
-				<label class="field-label" for="strengths_comment">
-					Strengths <span class="field-optional">(optional)</span>
-				</label>
+				<label class="field-label" for="strengths_comment">Strengths</label>
 				<textarea
 					id="strengths_comment"
 					class="input textarea"
 					bind:value={strengthsComment}
+					oninput={() => clearFieldError('strengths_comment')}
+					aria-invalid={!!fieldErrors.strengths_comment}
+					aria-describedby={fieldErrors.strengths_comment ? 'strengths_comment-error' : undefined}
 					rows="3"
 					placeholder="What did they do well? Where do they shine?"
 					disabled={submitting}
 					maxlength="2000"
+					required
 				></textarea>
+				{#if fieldErrors.strengths_comment}
+					<span id="strengths_comment-error" class="field-error">{fieldErrors.strengths_comment}</span>
+				{/if}
 			</div>
 
 			<div class="field">
-				<label class="field-label" for="weaknesses_comment">
-					Areas to grow <span class="field-optional">(optional)</span>
-				</label>
+				<label class="field-label" for="weaknesses_comment">Areas to grow</label>
 				<textarea
 					id="weaknesses_comment"
 					class="input textarea"
 					bind:value={weaknessesComment}
+					oninput={() => clearFieldError('weaknesses_comment')}
+					aria-invalid={!!fieldErrors.weaknesses_comment}
+					aria-describedby={fieldErrors.weaknesses_comment ? 'weaknesses_comment-error' : undefined}
 					rows="3"
 					placeholder="What could they work on? Be constructive and specific."
 					disabled={submitting}
 					maxlength="2000"
+					required
 				></textarea>
+				{#if fieldErrors.weaknesses_comment}
+					<span id="weaknesses_comment-error" class="field-error">{fieldErrors.weaknesses_comment}</span>
+				{/if}
 			</div>
 
 			<div class="field">
@@ -604,12 +623,6 @@
 		font-size: 12px;
 		color: var(--color-danger);
 		font-weight: 500;
-	}
-
-	.field-optional {
-		font-weight: 400;
-		color: var(--color-text-subtle);
-		font-size: 12px;
 	}
 
 	select.input {
@@ -742,11 +755,12 @@
 
 	.textarea {
 		height: auto;
-		min-height: 84px;
+		min-height: 120px;
 		padding: var(--space-3) var(--space-4);
 		resize: vertical;
 		line-height: 1.5;
 		font-family: inherit;
+		white-space: pre-wrap;
 	}
 
 	.visibility-options {
