@@ -33,7 +33,18 @@
 		submitting = true;
 		try {
 			await auth.login({ email: email.trim(), password });
-			await goto('/app', { replaceState: true });
+			// Force a full navigation (not client-side) as a fallback in case
+			// goto's client-side nav is intercepted/blocked by browser extensions.
+			if (auth.isAuthenticated) {
+				await goto('/app', { replaceState: true, noScroll: false });
+				// If goto didn't actually change the URL (e.g. blocked), hard-navigate.
+				if (typeof location !== 'undefined' && location.pathname !== '/app') {
+					location.assign('/app');
+				}
+			} else {
+				errorKind = 'generic';
+				errorMsg = 'Something went wrong. Please try again.';
+			}
 		} catch (err) {
 			if (err instanceof ApiClientError) {
 				switch (err.code) {

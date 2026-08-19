@@ -15,10 +15,13 @@ const API_PREFIX = '/v1';
 
 // --- Types (drop-in from spec §9) ---
 
+export type Role = 'org_admin' | 'user';
+
 export interface Employee {
 	id: string;
 	name: string;
 	organization_name: string;
+	role: Role;
 	manager_id: string | null;
 	title: string;
 	email: string;
@@ -50,6 +53,67 @@ export interface RegisterRequest {
 
 export interface ApiError {
 	message: string;
+}
+
+// --- Feedback domain types (drop-in from OpenAPI §components/schemas) ---
+
+export type FeedbackVisibility = 'public' | 'private' | 'manager_only';
+
+export interface FeedbackPeriod {
+	id: string;
+	name: string;
+	organization_name: string;
+	start_date: string; // ISO 8601
+	end_date: string; // ISO 8601
+	created_at: string;
+	updated_at: string;
+}
+
+export interface FeedbackPeriodListResponse {
+	periods: FeedbackPeriod[];
+}
+
+export interface CreateFeedbackPeriodRequest {
+	name: string;
+	start_date: string; // ISO 8601
+	end_date: string; // ISO 8601
+}
+
+export interface EmployeeListResponse {
+	employees: Employee[];
+	next_cursor: string | null;
+}
+
+export interface CreateFeedbackRequest {
+	period_id: string;
+	reviewee_id: string;
+	communication_score: number;
+	leadership_score: number;
+	technical_score: number;
+	collaboration_score: number;
+	delivery_score: number;
+	trust_score: number;
+	strengths_comment?: string;
+	weaknesses_comment?: string;
+	visibility?: FeedbackVisibility;
+}
+
+export interface FeedbackResponse {
+	id: string;
+	period_id: string;
+	reviewee_id: string;
+	reviewer_id: string;
+	communication_score: number;
+	leadership_score: number;
+	technical_score: number;
+	collaboration_score: number;
+	delivery_score: number;
+	trust_score: number;
+	strengths_comment: string;
+	weaknesses_comment: string;
+	visibility: FeedbackVisibility;
+	created_at: string;
+	updated_at: string;
 }
 
 // --- Error model ---
@@ -179,6 +243,40 @@ export async function getMe(token: string): Promise<Employee> {
 
 export async function register(payload: RegisterRequest): Promise<Employee> {
 	return request<Employee>('/register', { method: 'POST', body: payload });
+}
+
+// --- Feedback endpoints ---
+
+export async function listEmployees(
+	token: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<EmployeeListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<EmployeeListResponse>(`/employees${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
+}
+
+export async function listFeedbackPeriods(token: string): Promise<FeedbackPeriodListResponse> {
+	return request<FeedbackPeriodListResponse>('/feedback-periods', { method: 'GET', token });
+}
+
+export async function createFeedbackPeriod(
+	token: string,
+	payload: CreateFeedbackPeriodRequest
+): Promise<FeedbackPeriod> {
+	return request<FeedbackPeriod>('/feedback-periods', { method: 'POST', body: payload, token });
+}
+
+export async function createFeedback(
+	token: string,
+	payload: CreateFeedbackRequest
+): Promise<FeedbackResponse> {
+	return request<FeedbackResponse>('/feedbacks', { method: 'POST', body: payload, token });
 }
 
 export async function verifyEmail(token: string): Promise<{ message: string }> {
