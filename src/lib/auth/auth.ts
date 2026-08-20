@@ -130,6 +130,11 @@ export interface FeedbackResponse {
 	updated_at: string;
 }
 
+export interface FeedbackListResponse {
+	feedbacks: FeedbackResponse[];
+	next_cursor: string | null;
+}
+
 // --- Error model ---
 
 export type AuthErrorCode =
@@ -302,6 +307,20 @@ export async function createFeedback(
 	payload: CreateFeedbackRequest
 ): Promise<FeedbackResponse> {
 	return request<FeedbackResponse>('/feedbacks', { method: 'POST', body: payload, token });
+}
+
+export async function listMyFeedbacks(
+	token: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<FeedbackListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<FeedbackListResponse>(`/me/feedbacks${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
 }
 
 export async function verifyEmail(token: string): Promise<{ message: string }> {
