@@ -73,6 +73,12 @@ export interface ApiError {
 
 export type FeedbackVisibility = 'anonymous' | 'named';
 
+/**
+ * Lifecycle state of a feedback entry. `draft` entries are private to their
+ * author; `submitted` entries are visible per the visibility policy.
+ */
+export type FeedbackStatus = 'draft' | 'submitted';
+
 export interface FeedbackPeriod {
 	id: string;
 	name: string;
@@ -131,12 +137,52 @@ export interface FeedbackResponse {
 	strengths_comment: string;
 	weaknesses_comment: string;
 	visibility: FeedbackVisibility;
+	status: FeedbackStatus;
 	created_at: string;
 	updated_at: string;
 }
 
 export interface FeedbackListResponse {
 	feedbacks: FeedbackResponse[];
+	next_cursor: string | null;
+}
+
+// --- Feedback draft types (drop-in from OpenAPI §components/schemas) ---
+
+export interface CreateFeedbackDraftRequest {
+	period_id: string;
+	reviewee_id: string;
+	communication_score?: number | null;
+	leadership_score?: number | null;
+	technical_score?: number | null;
+	collaboration_score?: number | null;
+	delivery_score?: number | null;
+	trust_score?: number | null;
+	strengths_comment?: string;
+	weaknesses_comment?: string;
+	visibility?: FeedbackVisibility;
+}
+
+/**
+ * Body for PATCH /v1/feedback-drafts/{id} and (optionally) the submit
+ * endpoint. Omitted fields keep their stored values; a supplied value
+ * overwrites it (an empty string clears a comment). `period_id`,
+ * `reviewee_id`, and `reviewer_id` are fixed once the draft exists.
+ */
+export interface UpdateFeedbackDraftRequest {
+	communication_score?: number | null;
+	leadership_score?: number | null;
+	technical_score?: number | null;
+	collaboration_score?: number | null;
+	delivery_score?: number | null;
+	trust_score?: number | null;
+	strengths_comment?: string | null;
+	weaknesses_comment?: string | null;
+	visibility?: FeedbackVisibility | null;
+}
+
+export interface FeedbackDraftListResponse {
+	drafts: FeedbackResponse[];
 	next_cursor: string | null;
 }
 
@@ -328,6 +374,20 @@ export async function listMyFeedbacks(
 	});
 }
 
+export async function listMyGivenFeedbacks(
+	token: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<FeedbackListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<FeedbackListResponse>(`/me/given-feedbacks${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
+}
+
 export async function assignManager(
 	token: string,
 	employeeId: string,
@@ -335,6 +395,67 @@ export async function assignManager(
 ): Promise<Employee> {
 	return request<Employee>(`/employees/${encodeURIComponent(employeeId)}/manager`, {
 		method: 'PATCH',
+		body: payload,
+		token
+	});
+}
+
+// --- Feedback draft endpoints ---
+
+export async function createFeedbackDraft(
+	token: string,
+	payload: CreateFeedbackDraftRequest
+): Promise<FeedbackResponse> {
+	return request<FeedbackResponse>('/feedback-drafts', { method: 'POST', body: payload, token });
+}
+
+export async function listMyFeedbackDrafts(
+	token: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<FeedbackDraftListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<FeedbackDraftListResponse>(`/feedback-drafts${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
+}
+
+export async function getFeedbackDraft(token: string, id: string): Promise<FeedbackResponse> {
+	return request<FeedbackResponse>(`/feedback-drafts/${encodeURIComponent(id)}`, {
+		method: 'GET',
+		token
+	});
+}
+
+export async function updateFeedbackDraft(
+	token: string,
+	id: string,
+	payload: UpdateFeedbackDraftRequest
+): Promise<FeedbackResponse> {
+	return request<FeedbackResponse>(`/feedback-drafts/${encodeURIComponent(id)}`, {
+		method: 'PATCH',
+		body: payload,
+		token
+	});
+}
+
+export async function deleteFeedbackDraft(token: string, id: string): Promise<void> {
+	await request<void>(`/feedback-drafts/${encodeURIComponent(id)}`, {
+		method: 'DELETE',
+		token
+	});
+}
+
+export async function submitFeedbackDraft(
+	token: string,
+	id: string,
+	payload?: UpdateFeedbackDraftRequest
+): Promise<FeedbackResponse> {
+	return request<FeedbackResponse>(`/feedback-drafts/${encodeURIComponent(id)}/submit`, {
+		method: 'POST',
 		body: payload,
 		token
 	});

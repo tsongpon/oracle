@@ -5,9 +5,17 @@
 		listEmployees,
 		listFeedbackPeriods,
 		createFeedback,
+		createFeedbackDraft,
+		listMyFeedbackDrafts,
+		updateFeedbackDraft,
+		deleteFeedbackDraft,
+		submitFeedbackDraft,
+		type CreateFeedbackDraftRequest,
 		type Employee,
 		type FeedbackPeriod,
-		type FeedbackVisibility
+		type FeedbackResponse,
+		type FeedbackVisibility,
+		type UpdateFeedbackDraftRequest
 	} from '$lib/auth/auth';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -58,12 +66,20 @@
 	let formError = $state<string | null>(null);
 	let submitted = $state(false);
 
+	// --- Draft state ---
+	let drafts = $state<FeedbackResponse[]>([]);
+	let draftId = $state<string | null>(null);
+	let draftBusy = $state(false);
+	let saveStatus = $state<'idle' | 'saved' | 'error'>('idle');
+
 	type FieldErrors = Partial<
 		Record<'period_id' | 'reviewee_id' | ScoreField | 'strengths_comment' | 'weaknesses_comment' | 'form', string>
 	>;
 	let fieldErrors = $state<FieldErrors>({});
 
 	const currentUser = $derived(auth.user);
+	const editingDraft = $derived(drafts.find((d) => d.id === draftId) ?? null);
+	const otherDrafts = $derived(editingDraft ? drafts.filter((d) => d.id !== draftId) : drafts);
 
 	onMount(async () => {
 		if (!auth.isAuthenticated) {
@@ -82,14 +98,16 @@
 				goto('/login', { replaceState: true });
 				return;
 			}
-			// Fetch all employees (paginate) and periods in parallel.
-			const [allEmployees, periodsRes] = await Promise.all([
+			// Fetch all employees (paginate), periods, and my drafts in parallel.
+			const [allEmployees, periodsRes, draftsRes] = await Promise.all([
 				fetchAllEmployees(token),
-				listFeedbackPeriods(token)
+				listFeedbackPeriods(token),
+				fetchAllDrafts(token)
 			]);
 			// Filter out the current user (no self-review, per spec).
 			employees = allEmployees.filter((e) => e.id !== currentUser?.id);
 			periods = periodsRes.periods;
+			drafts = draftsRes;
 			// Preselect the most recent period (list is already start_date desc).
 			if (periods.length > 0) periodId = periods[0].id;
 			// Preselect the reviewee when linked from the team page (?reviewee=<id>).
@@ -99,6 +117,17 @@
 			} else if (requested) {
 				// Unknown or self ID — drop the stale param from the URL.
 				goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
+			}
+			// Resume a draft when linked with ?draft=<id>.
+			const requestedDraft = page.url.searchParams.get('draft');
+			if (requestedDraft) {
+				const draft = drafts.find((d) => d.id === requestedDraft);
+				if (draft) {
+					applyDraft(draft);
+				} else {
+					// Unknown or already-deleted draft — drop the stale param.
+					goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
+				}
 			}
 		} catch (err) {
 			if (err instanceof ApiClientError) {
@@ -127,6 +156,262 @@
 			if (!cursor) break;
 		}
 		return out;
+	}
+
+	async function fetchAllDrafts(token: string): Promise<FeedbackResponse[]> {
+		const out: FeedbackResponse[] = [];
+		let cursor: string | null = null;
+		for (let i = 0; i < 50; i++) {
+			const page = await listMyFeedbackDrafts(token, { limit: 100, cursor: cursor ?? undefined });
+			out.push(...page.drafts);
+			cursor = page.next_cursor;
+			if (!cursor) break;
+		}
+		return out;
+	}
+
+	/** Loads a draft into the form for continued editing. */
+	function applyDraft(draft: FeedbackResponse) {
+		draftId = draft.id;
+		periodId = draft.period_id;
+		revieweeId = draft.reviewee_id;
+		scores = {
+			communication_score: draft.communication_score,
+			leadership_score: draft.leadership_score,
+			technical_score: draft.technical_score,
+			collaboration_score: draft.collaboration_score,
+			delivery_score: draft.delivery_score,
+			trust_score: draft.trust_score
+		};
+		strengthsComment = draft.strengths_comment;
+		weaknessesComment = draft.weaknesses_comment;
+		visibility = draft.visibility;
+		fieldErrors = {};
+		formError = null;
+		saveStatus = 'idle';
+		if (!page.url.searchParams.has('draft')) {
+			goto(`/app/feedback/new?draft=${encodeURIComponent(draft.id)}`, {
+				replaceState: true,
+				noScroll: true,
+				keepFocus: true
+			});
+		}
+	}
+
+	function resetDraftState() {
+		draftId = null;
+		saveStatus = 'idle';
+	}
+
+	/** Validation for saving a draft: only the target is required. */
+	function validateDraft(): FieldErrors {
+		const errs: FieldErrors = {};
+		if (!periodId) errs.period_id = 'Select a feedback period.';
+		if (!revieweeId) errs.reviewee_id = 'Choose a colleague to review.';
+		return errs;
+	}
+
+	/** Shared score/comment/visibility fields for draft create and update. */
+	function draftFields(): Omit<CreateFeedbackDraftRequest, 'period_id' | 'reviewee_id'> {
+		return {
+			communication_score: scores.communication_score || null,
+			leadership_score: scores.leadership_score || null,
+			technical_score: scores.technical_score || null,
+			collaboration_score: scores.collaboration_score || null,
+			delivery_score: scores.delivery_score || null,
+			trust_score: scores.trust_score || null,
+			strengths_comment: strengthsComment.trim(),
+			weaknesses_comment: weaknessesComment.trim(),
+			visibility
+		};
+	}
+
+	function buildDraftPayload(): CreateFeedbackDraftRequest {
+		return { period_id: periodId, reviewee_id: revieweeId, ...draftFields() };
+	}
+
+	function buildDraftUpdatePayload(): UpdateFeedbackDraftRequest {
+		// period_id and reviewee_id are fixed once the draft exists.
+		return draftFields();
+	}
+
+	async function handleSaveDraft() {
+		if (draftBusy || submitting) return;
+		formError = null;
+		const errs = validateDraft();
+		fieldErrors = errs;
+		if (Object.keys(errs).length > 0) return;
+
+		const token = auth.token;
+		if (!token) {
+			await auth.logout();
+			goto('/login', { replaceState: true });
+			return;
+		}
+
+		draftBusy = true;
+		saveStatus = 'idle';
+		try {
+			if (draftId) {
+				const updated = await updateFeedbackDraft(token, draftId, buildDraftUpdatePayload());
+				replaceDraft(updated);
+				saveStatus = 'saved';
+			} else {
+				const created = await createFeedbackDraft(token, buildDraftPayload());
+				draftId = created.id;
+				replaceDraft(created);
+				saveStatus = 'saved';
+				if (!page.url.searchParams.has('draft')) {
+					goto(`/app/feedback/new?draft=${encodeURIComponent(created.id)}`, {
+						replaceState: true,
+						noScroll: true,
+						keepFocus: true
+					});
+				}
+			}
+		} catch (err) {
+			if (err instanceof ApiClientError) {
+				if (err.code === 'unauthorized') {
+					await auth.logout();
+					goto('/login', { replaceState: true });
+					return;
+				}
+				if (err.status === 409 && err.message.toLowerCase().includes('already exists')) {
+					// One draft per (reviewer, reviewee, period) — apply the current
+					// values onto the existing draft instead of losing them.
+					const existing = drafts.find(
+						(d) => d.period_id === periodId && d.reviewee_id === revieweeId
+					);
+					if (existing) {
+						try {
+							const updated = await updateFeedbackDraft(
+								token,
+								existing.id,
+								buildDraftUpdatePayload()
+							);
+							draftId = updated.id;
+							replaceDraft(updated);
+							saveStatus = 'saved';
+							formError =
+								'A draft for this colleague already existed — your changes were saved onto it below.';
+						} catch {
+							applyDraft(existing);
+							saveStatus = 'error';
+							formError =
+								'You already have a draft for this colleague in this period — it is now open below.';
+						}
+					} else {
+						await refreshDrafts();
+						saveStatus = 'error';
+						formError = 'You already have a draft for this colleague in this period.';
+					}
+				} else if (err.status === 409) {
+					saveStatus = 'error';
+					formError =
+						'This draft was modified in another tab or session. Reload to pick up the latest version.';
+				} else if (err.code === 'bad_request') {
+					const mapped = mapServerMessageToField(err.message);
+					if (Object.keys(mapped).length > 0) {
+						fieldErrors = { ...fieldErrors, ...mapped };
+					} else {
+						saveStatus = 'error';
+						formError = err.message;
+					}
+				} else {
+					saveStatus = 'error';
+					formError = 'Could not save your draft. Please try again.';
+				}
+			} else {
+				saveStatus = 'error';
+				formError = 'Could not save your draft. Please try again.';
+			}
+		} finally {
+			draftBusy = false;
+		}
+	}
+
+	async function refreshDrafts() {
+		const token = auth.token;
+		if (!token) return;
+		try {
+			drafts = await fetchAllDrafts(token);
+		} catch {
+			// Keep the stale list; saving/continuing still works.
+		}
+	}
+
+	function replaceDraft(draft: FeedbackResponse) {
+		const idx = drafts.findIndex((d) => d.id === draft.id);
+		if (idx === -1) {
+			drafts = [draft, ...drafts];
+		} else {
+			drafts = drafts.with(idx, draft);
+		}
+	}
+
+	async function handleDiscardDraft(draft: FeedbackResponse) {
+		if (draftBusy) return;
+		const label = draftName(draft);
+		if (!window.confirm(`Discard your draft feedback for ${label}? This cannot be undone.`)) return;
+		draftBusy = true;
+		try {
+			const token = auth.token;
+			if (!token) {
+				await auth.logout();
+				goto('/login', { replaceState: true });
+				return;
+			}
+			await deleteFeedbackDraft(token, draft.id);
+			drafts = drafts.filter((d) => d.id !== draft.id);
+			if (draftId === draft.id) {
+				resetDraftState();
+				clearForm();
+				if (page.url.searchParams.has('draft')) {
+					goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
+				}
+			}
+		} catch (err) {
+			if (err instanceof ApiClientError && err.code === 'unauthorized') {
+				await auth.logout();
+				goto('/login', { replaceState: true });
+				return;
+			}
+			formError = 'Could not discard the draft. Please try again.';
+		} finally {
+			draftBusy = false;
+		}
+	}
+
+	function draftName(draft: FeedbackResponse): string {
+		return (
+			employees.find((e) => e.id === draft.reviewee_id)?.name ??
+			periods.find((p) => p.id === draft.period_id)?.name ??
+			'your teammate'
+		);
+	}
+
+	function draftPeriodName(draft: FeedbackResponse): string {
+		return periods.find((p) => p.id === draft.period_id)?.name ?? 'Unknown period';
+	}
+
+	function draftProgress(draft: FeedbackResponse): string {
+		const filled = SCORE_FIELDS.filter((f) => draft[f.key] > 0).length;
+		const comments = [draft.strengths_comment, draft.weaknesses_comment].filter((c) => c.trim())
+			.length;
+		return `${filled}/6 scores · ${comments}/2 comments`;
+	}
+
+	function formatDateTime(iso: string): string {
+		try {
+			return new Date(iso).toLocaleString(undefined, {
+				month: 'short',
+				day: 'numeric',
+				hour: 'numeric',
+				minute: '2-digit'
+			});
+		} catch {
+			return iso;
+		}
 	}
 
 	function validate(): FieldErrors {
@@ -195,22 +480,58 @@
 				goto('/login', { replaceState: true });
 				return;
 			}
-			await createFeedback(token, {
-				period_id: periodId,
-				reviewee_id: revieweeId,
-				communication_score: scores.communication_score,
-				leadership_score: scores.leadership_score,
-				technical_score: scores.technical_score,
-				collaboration_score: scores.collaboration_score,
-				delivery_score: scores.delivery_score,
-				trust_score: scores.trust_score,
-				strengths_comment: strengthsComment.replace(/^\s+|\s+$/g, ''),
-				weaknesses_comment: weaknessesComment.replace(/^\s+|\s+$/g, ''),
-				visibility
-			});
+			if (draftId) {
+				// Submitting a draft applies the form values as final edits
+				// before the server's full validation runs.
+				await submitFeedbackDraft(token, draftId, {
+					communication_score: scores.communication_score,
+					leadership_score: scores.leadership_score,
+					technical_score: scores.technical_score,
+					collaboration_score: scores.collaboration_score,
+					delivery_score: scores.delivery_score,
+					trust_score: scores.trust_score,
+					strengths_comment: strengthsComment.replace(/^\s+|\s+$/g, ''),
+					weaknesses_comment: weaknessesComment.replace(/^\s+|\s+$/g, ''),
+					visibility
+				});
+				drafts = drafts.filter((d) => d.id !== draftId);
+			} else {
+				await createFeedback(token, {
+					period_id: periodId,
+					reviewee_id: revieweeId,
+					communication_score: scores.communication_score,
+					leadership_score: scores.leadership_score,
+					technical_score: scores.technical_score,
+					collaboration_score: scores.collaboration_score,
+					delivery_score: scores.delivery_score,
+					trust_score: scores.trust_score,
+					strengths_comment: strengthsComment.replace(/^\s+|\s+$/g, ''),
+					weaknesses_comment: weaknessesComment.replace(/^\s+|\s+$/g, ''),
+					visibility
+				});
+			}
 			submitted = true;
 		} catch (err) {
 			if (err instanceof ApiClientError) {
+				if (err.status === 422) {
+					// Period window not open (draft submit).
+					fieldErrors = { ...fieldErrors, period_id: 'This feedback period is not open for submission.' };
+					return;
+				}
+				if (err.status === 409) {
+					// Concurrent modification (draft submit).
+					formError =
+						'This draft was modified in another tab or session. Reload to pick up the latest version.';
+					return;
+				}
+				if (err.status === 404 && draftId) {
+					// Draft was submitted or deleted elsewhere.
+					const goneId = draftId;
+					resetDraftState();
+					drafts = drafts.filter((d) => d.id !== goneId);
+					formError = 'This draft no longer exists — it may have been submitted or discarded already.';
+					return;
+				}
 				switch (err.code) {
 					case 'bad_request':
 						if (err.message === 'invalid request body' || err.message === '') {
@@ -250,11 +571,30 @@
 		clearFieldError(field);
 	}
 
+	function clearForm() {
+		revieweeId = '';
+		strengthsComment = '';
+		weaknessesComment = '';
+		scores = {
+			communication_score: 0,
+			leadership_score: 0,
+			technical_score: 0,
+			collaboration_score: 0,
+			delivery_score: 0,
+			trust_score: 0
+		};
+		visibility = 'anonymous';
+		if (periods.length > 0) periodId = periods[0].id;
+		fieldErrors = {};
+		formError = null;
+	}
+
 	function clearFieldError(field: keyof FieldErrors) {
 		if (fieldErrors[field]) {
 			fieldErrors = { ...fieldErrors, [field]: undefined };
 		}
 		formError = null;
+		if (saveStatus === 'saved') saveStatus = 'idle';
 	}
 
 	function initials(name: string) {
@@ -322,21 +662,9 @@
 					class="btn btn-secondary"
 					onclick={() => {
 						submitted = false;
-						revieweeId = '';
-						strengthsComment = '';
-						weaknessesComment = '';
-						scores = {
-							communication_score: 0,
-							leadership_score: 0,
-							technical_score: 0,
-							collaboration_score: 0,
-							delivery_score: 0,
-							trust_score: 0
-						};
-						visibility = 'anonymous';
-						fieldErrors = {};
-						formError = null;
-						if (page.url.searchParams.has('reviewee')) {
+						resetDraftState();
+						clearForm();
+						if (page.url.searchParams.has('reviewee') || page.url.searchParams.has('draft')) {
 							goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
 						}
 					}}
@@ -387,7 +715,63 @@
 			<a href="/app" class="btn btn-secondary">Back to dashboard</a>
 		</div>
 	{:else}
+		{#if otherDrafts.length > 0}
+			<div class="card drafts-card">
+				<div class="drafts-head">
+					<h2>Your drafts</h2>
+					<span class="drafts-note">Private to you — not visible to anyone else.</span>
+				</div>
+				<ul class="drafts-list">
+					{#each otherDrafts as draft (draft.id)}
+						<li class="draft-row">
+							<div class="draft-info">
+								<span class="draft-reviewee">{draftName(draft)}</span>
+								<span class="draft-meta">
+									{draftPeriodName(draft)} · {draftProgress(draft)} · saved
+									{formatDateTime(draft.updated_at)}
+								</span>
+							</div>
+							<div class="draft-actions">
+								<button type="button" class="btn btn-secondary" onclick={() => applyDraft(draft)} disabled={draftBusy}>
+									Continue
+								</button>
+								<button
+									type="button"
+									class="btn btn-ghost"
+									onclick={() => handleDiscardDraft(draft)}
+									disabled={draftBusy}
+								>
+									Discard
+								</button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
+
 		<form class="card form-card" onsubmit={handleSubmit} novalidate>
+			{#if editingDraft}
+				<div class="draft-banner">
+					<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+						<path d="M4.5 2.5h8L17 7v10.5a1 1 0 01-1 1h-11.5a1 1 0 01-1-1v-14a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+						<path d="M12 2.5V7h4.5M7 11h6M7 14h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					<span>
+						You're editing a saved draft for <strong>{draftName(editingDraft)}</strong>. The period
+						and colleague can't be changed.
+					</span>
+					<button
+						type="button"
+						class="btn btn-ghost draft-banner-discard"
+						onclick={() => editingDraft && handleDiscardDraft(editingDraft)}
+						disabled={draftBusy || submitting}
+					>
+						Discard draft
+					</button>
+				</div>
+			{/if}
+
 			{#if formError}
 				<div class="alert" role="alert">
 					<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -406,7 +790,7 @@
 					onchange={() => clearFieldError('period_id')}
 					aria-invalid={!!fieldErrors.period_id}
 					aria-describedby={fieldErrors.period_id ? 'period_id-error' : undefined}
-					disabled={submitting}
+					disabled={submitting || !!draftId}
 					required
 				>
 					{#each periods as p}
@@ -427,7 +811,7 @@
 					onchange={() => clearFieldError('reviewee_id')}
 					aria-invalid={!!fieldErrors.reviewee_id}
 					aria-describedby={fieldErrors.reviewee_id ? 'reviewee_id-error' : undefined}
-					disabled={submitting}
+					disabled={submitting || !!draftId}
 					required
 				>
 					<option value="">Select a teammate…</option>
@@ -553,17 +937,36 @@
 				</div>
 			</div>
 
-			<div class="form-actions">
-				<a href="/app" class="btn btn-secondary">Cancel</a>
-				<button type="submit" class="btn btn-primary" disabled={submitting}>
-					{#if submitting}
-						<span class="spinner" aria-hidden="true"></span>
-						Submitting…
-					{:else}
-						Submit feedback
-					{/if}
-				</button>
-			</div>
+		<div class="form-actions">
+			<a href="/app" class="btn btn-secondary">Cancel</a>
+			<button
+				type="button"
+				class="btn btn-secondary"
+				onclick={handleSaveDraft}
+				disabled={draftBusy || submitting || (!draftId && (!periodId || !revieweeId))}
+				title={draftId ? 'Save your changes to this draft' : 'Save your progress and finish later'}
+			>
+				{#if draftBusy}
+					<span class="spinner spinner-dark" aria-hidden="true"></span>
+					Saving…
+				{:else if saveStatus === 'saved'}
+					<svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+						<path d="M4 10.5l4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					Draft saved
+				{:else}
+					Save draft
+				{/if}
+			</button>
+			<button type="submit" class="btn btn-primary" disabled={submitting}>
+				{#if submitting}
+					<span class="spinner" aria-hidden="true"></span>
+					Submitting…
+				{:else}
+					Submit feedback
+				{/if}
+			</button>
+		</div>
 		</form>
 	{/if}
 </div>
@@ -915,6 +1318,136 @@
 	@keyframes spin {
 		to {
 			transform: rotate(360deg);
+		}
+	}
+
+	.drafts-card {
+		margin-bottom: var(--space-6);
+		padding: var(--space-6) var(--space-8);
+	}
+
+	.drafts-head {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-3);
+		margin-bottom: var(--space-4);
+		flex-wrap: wrap;
+	}
+
+	.drafts-head h2 {
+		font-size: 16px;
+	}
+
+	.drafts-note {
+		font-size: 12px;
+		color: var(--color-text-subtle);
+	}
+
+	.drafts-list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.draft-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-4);
+		padding: var(--space-3) var(--space-4);
+		background: var(--color-surface-2);
+		border-radius: var(--radius-md);
+	}
+
+	.draft-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+
+	.draft-reviewee {
+		font-size: 14px;
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.draft-meta {
+		font-size: 12px;
+		color: var(--color-text-subtle);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.draft-actions {
+		display: flex;
+		gap: var(--space-2);
+		flex-shrink: 0;
+	}
+
+	.draft-actions .btn {
+		height: 34px;
+		padding: 0 var(--space-4);
+		font-size: 13px;
+	}
+
+	.draft-banner {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		background: var(--color-primary-soft);
+		color: var(--color-text);
+		border: 1px solid var(--color-primary);
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-md);
+		font-size: 13px;
+		line-height: 1.45;
+	}
+
+	.draft-banner svg {
+		flex-shrink: 0;
+		color: var(--color-primary);
+	}
+
+	.draft-banner strong {
+		font-weight: 600;
+	}
+
+	.draft-banner-discard {
+		margin-left: auto;
+		flex-shrink: 0;
+		height: 30px;
+		padding: 0 var(--space-3);
+		font-size: 12px;
+	}
+
+	.spinner-dark {
+		border-color: rgba(0, 0, 0, 0.25);
+		border-top-color: currentColor;
+	}
+
+	@media (max-width: 640px) {
+		.draft-row {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
+		.draft-actions {
+			justify-content: flex-end;
+		}
+
+		.draft-banner {
+			flex-wrap: wrap;
+		}
+
+		.draft-banner-discard {
+			margin-left: 0;
 		}
 	}
 
