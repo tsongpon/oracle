@@ -388,6 +388,35 @@ export async function listMyGivenFeedbacks(
 	});
 }
 
+export async function listMyReportees(
+	token: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<EmployeeListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<EmployeeListResponse>(`/me/reports${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
+}
+
+export async function listEmployeeFeedbacks(
+	token: string,
+	employeeId: string,
+	options: { limit?: number; cursor?: string } = {}
+): Promise<FeedbackListResponse> {
+	const params = new URLSearchParams();
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<FeedbackListResponse>(
+		`/employees/${encodeURIComponent(employeeId)}/feedbacks${qs ? `?${qs}` : ''}`,
+		{ method: 'GET', token }
+	);
+}
+
 export async function assignManager(
 	token: string,
 	employeeId: string,
