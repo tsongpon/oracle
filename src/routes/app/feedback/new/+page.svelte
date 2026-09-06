@@ -11,6 +11,7 @@
 	} from '$lib/auth/auth';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 
 	type ScoreField =
 		| 'communication_score'
@@ -91,6 +92,14 @@
 			periods = periodsRes.periods;
 			// Preselect the most recent period (list is already start_date desc).
 			if (periods.length > 0) periodId = periods[0].id;
+			// Preselect the reviewee when linked from the team page (?reviewee=<id>).
+			const requested = page.url.searchParams.get('reviewee');
+			if (requested && employees.some((e) => e.id === requested)) {
+				revieweeId = requested;
+			} else if (requested) {
+				// Unknown or self ID — drop the stale param from the URL.
+				goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
+			}
 		} catch (err) {
 			if (err instanceof ApiClientError) {
 				if (err.code === 'unauthorized') {
@@ -327,6 +336,9 @@
 						visibility = 'anonymous';
 						fieldErrors = {};
 						formError = null;
+						if (page.url.searchParams.has('reviewee')) {
+							goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
+						}
 					}}
 				>
 					Write another

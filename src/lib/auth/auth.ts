@@ -98,6 +98,11 @@ export interface EmployeeListResponse {
 	next_cursor: string | null;
 }
 
+export interface AssignManagerRequest {
+	/** Employee ID of the new manager, or null to clear the assignment. */
+	manager_id: string | null;
+}
+
 export interface CreateFeedbackRequest {
 	period_id: string;
 	reviewee_id: string;
@@ -319,6 +324,18 @@ export async function listMyFeedbacks(
 	const qs = params.toString();
 	return request<FeedbackListResponse>(`/me/feedbacks${qs ? `?${qs}` : ''}`, {
 		method: 'GET',
+		token
+	});
+}
+
+export async function assignManager(
+	token: string,
+	employeeId: string,
+	payload: AssignManagerRequest
+): Promise<Employee> {
+	return request<Employee>(`/employees/${encodeURIComponent(employeeId)}/manager`, {
+		method: 'PATCH',
+		body: payload,
 		token
 	});
 }
