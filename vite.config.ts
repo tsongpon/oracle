@@ -1,4 +1,4 @@
-import adapter from '@sveltejs/adapter-auto';
+import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv } from 'vite';
 
@@ -17,10 +17,13 @@ export default defineConfig(({ mode }) => {
 						filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 				},
 
-				// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
-				// If your environment is not supported, or you settled on another environment, switch out the adapter.
-				// See https://svelte.dev/docs/kit/adapters for a list.
-				adapter: adapter()
+				// Every route sets ssr=false (client-only SPA; auth lives in
+				// localStorage), so a static build with an index.html fallback
+				// is the full deployable. VITE_API_BASE_URL is baked in at
+				// build time; unset means same-origin /v1 (dev proxy).
+				adapter: adapter({
+					fallback: 'index.html'
+				})
 			})
 		],
 

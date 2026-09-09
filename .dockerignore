@@ -1,0 +1,22 @@
+# Never bake secrets into the build context
+.env
+.env.*
+!.env.example
+!.env.test
+
+# VCS and CI
+.git
+.github
+.gitignore
+
+# Local build artifacts (rebuilt inside the container)
+node_modules
+.svelte-kit
+build
+.output
+
+# Tooling / editor clutter
+.DS_Store
+.idea
+.vscode
+*.log
