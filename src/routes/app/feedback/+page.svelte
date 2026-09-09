@@ -441,14 +441,14 @@
 									{/each}
 								</div>
 
-								<div class="comment-block">
-									<div class="comment-label">Strengths</div>
-									<p class="comment-text">{f.strengths_comment}</p>
-								</div>
-								<div class="comment-block">
-									<div class="comment-label">Areas to grow</div>
-									<p class="comment-text">{f.weaknesses_comment}</p>
-								</div>
+							<div class="comment-block strengths">
+								<div class="comment-label">Strengths</div>
+								<p class="comment-text">{f.strengths_comment}</p>
+							</div>
+							<div class="comment-block growth">
+								<div class="comment-label">Areas to grow</div>
+								<p class="comment-text">{f.weaknesses_comment}</p>
+							</div>
 							</div>
 						{/if}
 					</li>
@@ -848,9 +848,21 @@
 	}
 
 	.comment-block {
+		background: var(--color-surface-2);
+		border-radius: var(--radius-md);
+		border-left: 3px solid var(--color-border-strong);
+		padding: var(--space-3) var(--space-4);
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
+	}
+
+	.comment-block.strengths {
+		border-left-color: var(--color-success);
+	}
+
+	.comment-block.growth {
+		border-left-color: var(--color-warning);
 	}
 
 	.comment-label {

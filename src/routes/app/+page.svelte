@@ -166,7 +166,7 @@
 				goto('/login', { replaceState: true });
 				return;
 			}
-			const [allEmployees, periodsRes, draftsRes, receivedRes, givenRes] = await Promise.all([
+			const [allEmployees, periodsRes, draftsRes, givenRes, receivedRes] = await Promise.all([
 				fetchAllEmployees(token),
 				listFeedbackPeriods(token),
 				fetchAllDrafts(token),

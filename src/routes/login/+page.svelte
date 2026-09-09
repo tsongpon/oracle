@@ -88,25 +88,6 @@
 </script>
 
 <div class="auth-shell">
-	<div class="auth-brand">
-		<div class="brand-mark" aria-hidden="true">
-			<svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-				<circle cx="14" cy="14" r="13" stroke="white" stroke-width="1.5" opacity="0.45" />
-				<circle cx="14" cy="14" r="8" stroke="white" stroke-width="1.5" opacity="0.7" />
-				<circle cx="14" cy="14" r="3" fill="white" />
-			</svg>
-		</div>
-		<div class="brand-name">360 Feedback</div>
-		<p class="brand-tagline">
-			Continuous peer feedback that helps your team grow — together.
-		</p>
-		<ul class="brand-points">
-			<li>Run structured 360° review cycles in minutes</li>
-			<li>Collect balanced, actionable feedback</li>
-			<li>Track growth themes across the year</li>
-		</ul>
-	</div>
-
 	<div class="auth-form-wrap">
 		<form class="auth-card" onsubmit={handleSubmit} novalidate>
 			<div class="auth-card-head">
@@ -225,87 +206,11 @@
 	.auth-shell {
 		min-height: 100vh;
 		display: grid;
-		grid-template-columns: 1.1fr 1fr;
+		grid-template-columns: 1fr;
 		background: var(--color-bg);
 	}
 
-	/* Left brand panel */
-	.auth-brand {
-		background: radial-gradient(120% 120% at 0% 0%, #6366f1 0%, #4f46e5 45%, #3b34c4 100%);
-		color: #fff;
-		padding: var(--space-12) var(--space-12);
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		position: relative;
-		overflow: hidden;
-	}
-
-	.auth-brand::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		background:
-			radial-gradient(60% 50% at 100% 0%, rgba(255, 255, 255, 0.12), transparent 60%),
-			radial-gradient(50% 60% at 100% 100%, rgba(255, 255, 255, 0.08), transparent 60%);
-		pointer-events: none;
-	}
-
-	.brand-mark {
-		width: 52px;
-		height: 52px;
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.12);
-		display: grid;
-		place-items: center;
-		margin-bottom: var(--space-6);
-		backdrop-filter: blur(8px);
-	}
-
-	.brand-name {
-		font-size: 26px;
-		font-weight: 700;
-		letter-spacing: -0.02em;
-	}
-
-	.brand-tagline {
-		margin-top: var(--space-3);
-		font-size: 16px;
-		line-height: 1.55;
-		color: rgba(255, 255, 255, 0.82);
-		max-width: 38ch;
-	}
-
-	.brand-points {
-		list-style: none;
-		padding: 0;
-		margin: var(--space-8) 0 0;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-3);
-		max-width: 38ch;
-	}
-
-	.brand-points li {
-		position: relative;
-		padding-left: var(--space-6);
-		font-size: 14px;
-		color: rgba(255, 255, 255, 0.9);
-		line-height: 1.5;
-	}
-
-	.brand-points li::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 7px;
-		width: 18px;
-		height: 18px;
-		border-radius: 50%;
-		background: rgba(255, 255, 255, 0.15) url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='0 0 10 10' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 5.2L4.2 7.4L8.2 3' stroke='white' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat;
-	}
-
-	/* Right form panel */
+	/* Form panel */
 	.auth-form-wrap {
 		display: flex;
 		flex-direction: column;
@@ -448,15 +353,5 @@
 
 	.auth-foot a {
 		font-weight: 600;
-	}
-
-	@media (max-width: 900px) {
-		.auth-shell {
-			grid-template-columns: 1fr;
-		}
-
-		.auth-brand {
-			display: none;
-		}
 	}
 </style>
