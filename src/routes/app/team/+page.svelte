@@ -15,11 +15,21 @@
 	let rowErrors = $state<Record<string, string>>({});
 	let savingIds = $state<Set<string>>(new Set());
 	let savedId = $state<string | null>(null);
+	let search = $state('');
 
 	const isAdmin = $derived(auth.user?.role === 'org_admin');
 	const managerNameById = $derived(
 		new Map(employees.map((e) => [e.id, e.name]))
 	);
+
+	// Case-insensitive filter over name, title, and email.
+	const filteredEmployees = $derived.by(() => {
+		const q = search.trim().toLowerCase();
+		if (!q) return employees;
+		return employees.filter((e) =>
+			`${e.name} ${e.title} ${e.email}`.toLowerCase().includes(q)
+		);
+	});
 
 	onMount(async () => {
 		if (!auth.isAuthenticated) {
@@ -245,6 +255,43 @@
 		</div>
 	{/if}
 
+	{#if employees.length > 0}
+		<div class="filters card">
+			<div class="filter-group">
+				<label class="filter-label" for="team-search">Filter</label>
+				<div class="search-wrap">
+					<svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+						<circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/>
+						<path d="M21 21l-4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+					</svg>
+					<input
+						id="team-search"
+						class="input search-input"
+						type="search"
+						placeholder="Search by name, title, or email…"
+						bind:value={search}
+					/>
+					{#if search}
+						<button
+							type="button"
+							class="search-clear"
+							onclick={() => (search = '')}
+							aria-label="Clear search"
+						>
+							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+								<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+							</svg>
+						</button>
+					{/if}
+				</div>
+			</div>
+			<span class="filter-count">
+				{filteredEmployees.length} of {employees.length}
+				{employees.length === 1 ? 'member' : 'members'}
+			</span>
+		</div>
+	{/if}
+
 	{#if loading && employees.length === 0}
 		<div class="card empty-card">
 			<div class="spinner-lg" aria-label="Loading"></div>
@@ -265,6 +312,22 @@
 				Invite teammates to your organization and they will show up here.
 			</p>
 		</div>
+	{:else if filteredEmployees.length === 0}
+		<div class="card empty-card">
+			<div class="empty-icon" aria-hidden="true">
+				<svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+					<circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.6"/>
+					<path d="M21 21l-4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+				</svg>
+			</div>
+			<p class="empty-title">No matches</p>
+			<p class="empty-sub">
+				No members match “{search}”. Try a different search.
+			</p>
+			<button type="button" class="btn btn-secondary" onclick={() => (search = '')}>
+				Clear search
+			</button>
+		</div>
 	{:else}
 		<div class="card table-card">
 			<div class="table-head grid-row">
@@ -274,7 +337,7 @@
 				<span>Manager</span>
 			</div>
 
-			{#each employees as employee (employee.id)}
+			{#each filteredEmployees as employee (employee.id)}
 				<div class="grid-row member-row">
 					<div class="member">
 						<div class="avatar" style="background:{colorFor(employee.id)}">
@@ -417,6 +480,81 @@
 
 	.card {
 		padding: var(--space-6);
+	}
+
+	/* Filter bar */
+	.filters {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: var(--space-4);
+		margin-bottom: var(--space-5);
+		padding: var(--space-4) var(--space-5);
+	}
+
+	.filter-group {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		flex: 1 1 260px;
+		max-width: 420px;
+	}
+
+	.filter-label {
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--color-text-subtle);
+	}
+
+	.search-wrap {
+		position: relative;
+	}
+
+	.search-icon {
+		position: absolute;
+		left: 10px;
+		top: 50%;
+		transform: translateY(-50%);
+		color: var(--color-text-subtle);
+		pointer-events: none;
+	}
+
+	.search-input {
+		width: 100%;
+		padding-left: 36px;
+		padding-right: 36px;
+	}
+
+	.search-clear {
+		position: absolute;
+		right: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 22px;
+		height: 22px;
+		display: grid;
+		place-items: center;
+		background: transparent;
+		border: none;
+		border-radius: var(--radius-sm);
+		color: var(--color-text-subtle);
+		cursor: pointer;
+		transition: color var(--transition-fast), background var(--transition-fast);
+	}
+
+	.search-clear:hover {
+		color: var(--color-text);
+		background: var(--color-surface-2);
+	}
+
+	.filter-count {
+		font-size: 12px;
+		color: var(--color-text-subtle);
+		padding-bottom: var(--space-2);
+		white-space: nowrap;
 	}
 
 	.table-card {

@@ -81,6 +81,81 @@
 	const editingDraft = $derived(drafts.find((d) => d.id === draftId) ?? null);
 	const otherDrafts = $derived(editingDraft ? drafts.filter((d) => d.id !== draftId) : drafts);
 
+	// --- Reviewee combobox state ---
+	let revieweeQuery = $state('');
+	let revieweeOpen = $state(false);
+	let revieweeActive = $state(0); // index of the highlighted option
+
+	// Options filtered by the typed query (name, title, email).
+	const revieweeOptions = $derived.by(() => {
+		const q = revieweeQuery.trim().toLowerCase();
+		if (!q) return employees;
+		return employees.filter((e) => `${e.name} ${e.title} ${e.email}`.toLowerCase().includes(q));
+	});
+
+	const revieweeSearchId = 'reviewee_id';
+	const revieweeListId = 'reviewee_id-listbox';
+	const revieweeLabel = $derived.by(() => {
+		if (!revieweeId) return '';
+		const e = employees.find((x) => x.id === revieweeId);
+		return e ? `${e.name} — ${e.title}` : '';
+	});
+
+	function openReviewee() {
+		if (submitting || draftId) return;
+		revieweeOpen = true;
+		// Seed the query with the selected name so typing continues naturally.
+		revieweeQuery = revieweeId && reviewee ? reviewee.name : '';
+		revieweeActive = Math.max(0, revieweeOptions.findIndex((e) => e.id === revieweeId));
+	}
+
+	function closeReviewee() {
+		revieweeOpen = false;
+		// Restore the selected teammate's name when the user dismisses without
+		// picking (or typed something else).
+		revieweeQuery = revieweeId && reviewee ? reviewee.name : '';
+	}
+
+	function selectReviewee(id: string) {
+		revieweeId = id;
+		revieweeOpen = false;
+		revieweeQuery = reviewee?.name ?? '';
+		clearFieldError('reviewee_id');
+	}
+
+	function onRevieweeInput(event: Event) {
+		revieweeQuery = (event.currentTarget as HTMLInputElement).value;
+		revieweeActive = 0;
+		if (!revieweeOpen) revieweeOpen = true;
+		clearFieldError('reviewee_id');
+	}
+
+	function onRevieweeKeydown(event: KeyboardEvent) {
+		if (!revieweeOpen) return;
+		const opts = revieweeOptions;
+		if (event.key === 'ArrowDown') {
+			event.preventDefault();
+			revieweeActive = Math.min(opts.length - 1, revieweeActive + 1);
+		} else if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			revieweeActive = Math.max(0, revieweeActive - 1);
+		} else if (event.key === 'Enter') {
+			// Only when a highlighted option exists; otherwise let the form
+			// submit naturally.
+			if (opts.length > 0) {
+				event.preventDefault();
+				selectReviewee(opts[revieweeActive].id);
+			}
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			closeReviewee();
+		}
+	}
+
+	function onOptionPointer(i: number) {
+		revieweeActive = i;
+	}
+
 	onMount(async () => {
 		if (!auth.isAuthenticated) {
 			goto('/login', { replaceState: true });
@@ -573,6 +648,9 @@
 
 	function clearForm() {
 		revieweeId = '';
+		revieweeQuery = '';
+		revieweeOpen = false;
+		revieweeActive = 0;
 		strengthsComment = '';
 		weaknessesComment = '';
 		scores = {
@@ -802,38 +880,84 @@
 				{/if}
 			</div>
 
-			<div class="field">
-				<label class="field-label" for="reviewee_id">Who are you reviewing?</label>
-				<select
-					id="reviewee_id"
+		<div class="field">
+			<label class="field-label" for={revieweeSearchId}>Who are you reviewing?</label>
+			<div class="combobox">
+				<input
+					id={revieweeSearchId}
 					class="input"
-					bind:value={revieweeId}
-					onchange={() => clearFieldError('reviewee_id')}
+					type="text"
+					autocomplete="off"
+					role="combobox"
+					placeholder={revieweeLabel || 'Type to search a teammate…'}
+					value={revieweeOpen ? revieweeQuery : revieweeLabel}
+					onfocus={openReviewee}
+					oninput={onRevieweeInput}
+					onkeydown={onRevieweeKeydown}
+					onblur={() => setTimeout(closeReviewee, 120)}
 					aria-invalid={!!fieldErrors.reviewee_id}
 					aria-describedby={fieldErrors.reviewee_id ? 'reviewee_id-error' : undefined}
+					aria-autocomplete="list"
+					aria-expanded={revieweeOpen}
+					aria-controls={revieweeListId}
+					aria-activedescendant={revieweeOpen && revieweeOptions.length > 0
+						? `${revieweeListId}-opt-${revieweeOptions[revieweeActive]?.id}`
+						: undefined}
 					disabled={submitting || !!draftId}
 					required
-				>
-					<option value="">Select a teammate…</option>
-					{#each employees as e}
-						<option value={e.id}>{e.name} — {e.title}</option>
-					{/each}
-				</select>
-				{#if fieldErrors.reviewee_id}
-					<span id="reviewee_id-error" class="field-error">{fieldErrors.reviewee_id}</span>
+				/>
+				{#if revieweeOpen && !revieweeQuery}
+					<span class="combo-hint" aria-hidden="true">Type to filter…</span>
 				{/if}
-				{#if reviewee}
-					<div class="reviewee-preview">
-						<div class="mini-avatar" style="background:{colorFor(reviewee.id)}">
-							{initials(reviewee.name)}
-						</div>
-						<div class="reviewee-meta">
-							<span class="reviewee-name">{reviewee.name}</span>
-							<span class="reviewee-title">{reviewee.title}</span>
-						</div>
-					</div>
+				{#if revieweeOpen}
+					<ul
+						id={revieweeListId}
+						class="combo-list"
+						role="listbox"
+						aria-label="Teammates"
+					>
+						{#if revieweeOptions.length === 0}
+							<li class="combo-empty" role="option" aria-selected="false" aria-disabled="true">
+								No teammates match “{revieweeQuery}”
+							</li>
+						{:else}
+							{#each revieweeOptions as e, i (e.id)}
+								<li
+									id={`${revieweeListId}-opt-${e.id}`}
+									class="combo-option"
+									class:active={i === revieweeActive}
+									class:selected={e.id === revieweeId}
+									role="option"
+									aria-selected={e.id === revieweeId}
+									onpointerdown={(ev) => {
+										ev.preventDefault();
+										selectReviewee(e.id);
+									}}
+									onpointerenter={() => onOptionPointer(i)}
+								>
+									<span class="combo-name">{e.name}</span>
+									<span class="combo-title">{e.title || e.email}</span>
+								</li>
+							{/each}
+						{/if}
+					</ul>
 				{/if}
 			</div>
+			{#if fieldErrors.reviewee_id}
+				<span id="reviewee_id-error" class="field-error">{fieldErrors.reviewee_id}</span>
+			{/if}
+			{#if reviewee}
+				<div class="reviewee-preview">
+					<div class="mini-avatar" style="background:{colorFor(reviewee.id)}">
+						{initials(reviewee.name)}
+					</div>
+					<div class="reviewee-meta">
+						<span class="reviewee-name">{reviewee.name}</span>
+						<span class="reviewee-title">{reviewee.title}</span>
+					</div>
+				</div>
+			{/if}
+		</div>
 
 			<div class="section-divider">Scores</div>
 			<p class="section-sub">Rate each dimension from 1 (needs growth) to 5 (exceptional).</p>
@@ -1048,6 +1172,77 @@
 		background-repeat: no-repeat;
 		background-position: right var(--space-4) center;
 		padding-right: var(--space-8);
+	}
+
+	/* Reviewee combobox */
+	.combobox {
+		position: relative;
+	}
+
+	.combobox .input {
+		width: 100%;
+	}
+
+	.combo-hint {
+		position: absolute;
+		right: var(--space-4);
+		top: 50%;
+		transform: translateY(-50%);
+		font-size: 12px;
+		color: var(--color-text-subtle);
+		pointer-events: none;
+	}
+
+	.combo-list {
+		position: absolute;
+		z-index: 30;
+		left: 0;
+		right: 0;
+		top: calc(100% + 4px);
+		max-height: 260px;
+		overflow-y: auto;
+		margin: 0;
+		padding: var(--space-1);
+		list-style: none;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border-strong);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-lg);
+	}
+
+	.combo-option {
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		padding: var(--space-2) var(--space-3);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+
+	.combo-option.active,
+	.combo-option:hover {
+		background: var(--color-primary-soft);
+	}
+
+	.combo-option.selected .combo-name {
+		color: var(--color-primary);
+	}
+
+	.combo-name {
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	.combo-title {
+		font-size: 12px;
+		color: var(--color-text-subtle);
+	}
+
+	.combo-empty {
+		padding: var(--space-3);
+		font-size: 13px;
+		color: var(--color-text-muted);
+		text-align: center;
 	}
 
 	.reviewee-preview {

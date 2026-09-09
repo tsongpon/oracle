@@ -58,8 +58,8 @@
 		teammates.filter((t) => !coveredReviewees.has(t.id)).length
 	);
 
-	// Newest first for the activity feed.
-	const recentGiven = $derived(given.slice(0, 5));
+	// Newest received feedback for the dashboard panel.
+	const recentReceived = $derived(received.slice(0, 5));
 
 	const draftsCount = $derived(drafts.length);
 	const submittedThisCycle = $derived(
@@ -111,8 +111,9 @@
 		return periods.find((p) => p.id === id)?.name ?? '';
 	}
 
-	function revieweeName(f: FeedbackResponse): string {
-		return teammates.find((t) => t.id === f.reviewee_id)?.name ?? 'A teammate';
+	function reviewerName(f: FeedbackResponse): string {
+		if (f.visibility === 'anonymous' || !f.reviewer_id) return 'Anonymous';
+		return teammates.find((t) => t.id === f.reviewer_id)?.name ?? 'A teammate';
 	}
 
 	function excerptOf(f: FeedbackResponse): string {
@@ -312,31 +313,33 @@
 		<div class="panel card">
 			<div class="panel-head">
 				<div>
-					<h2 class="panel-title">Recent feedback</h2>
-					<p class="panel-sub">What you've shared with teammates</p>
+					<h2 class="panel-title">Recent received feedback</h2>
+					<p class="panel-sub">What your teammates have shared about you</p>
 				</div>
-				<a href="/app/feedback/new" class="panel-link">Write feedback →</a>
+				<a href="/app/feedback" class="panel-link">View all →</a>
 			</div>
-			{#if recentGiven.length === 0}
-				<p class="empty-text">You haven't submitted any feedback yet.</p>
+			{#if recentReceived.length === 0}
+				<p class="empty-text">
+					No feedback received yet — it'll show up here when teammates share feedback about you.
+				</p>
 			{:else}
 				<ul class="feed-list">
-					{#each recentGiven as item (item.id)}
+					{#each recentReceived as item (item.id)}
 						<li class="feed-item">
-							<div class="feed-avatar" style="background:{colorFor(item.reviewee_id)}">
-								{initials(revieweeName(item))}
+							<div class="feed-avatar" style="background:{colorFor(item.reviewer_id || item.id)}">
+								{item.visibility === 'anonymous' || !item.reviewer_id ? '?' : initials(reviewerName(item))}
 							</div>
 							<div class="feed-body">
 								<div class="feed-row">
-									<span class="feed-to">To {revieweeName(item)}</span>
-									<span class="badge badge-success">Submitted</span>
+									<span class="feed-to">From {reviewerName(item)}</span>
+									<span class="badge {item.visibility === 'named' ? 'badge-named' : 'badge-anon'}">
+										{item.visibility}
+									</span>
 								</div>
 								{#if excerptOf(item)}
 									<p class="feed-excerpt">“{excerptOf(item)}”</p>
 								{/if}
 								<div class="feed-meta">
-									<span>{item.visibility === 'anonymous' ? 'Anonymous' : 'Named'}</span>
-									<span class="feed-sep">·</span>
 									<span>{formatDate(item.created_at)}</span>
 									{#if periodLabel(item.period_id)}
 										<span class="feed-sep">·</span>
@@ -779,6 +782,16 @@
 	.badge-warning {
 		background: #fff5e0;
 		color: #b76b00;
+	}
+
+	.badge-named {
+		background: #eef2ff;
+		color: #4338ca;
+	}
+
+	.badge-anon {
+		background: var(--color-surface-2);
+		color: var(--color-text-muted);
 	}
 
 	/* Loading / error states */
