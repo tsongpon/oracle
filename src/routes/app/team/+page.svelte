@@ -3,8 +3,13 @@
 	import {
 		ApiClientError,
 		assignManager,
+		createFeedbackRequest,
 		listEmployees,
-		type Employee
+		listFeedbackPeriods,
+		listMyFeedbackRequests,
+		type Employee,
+		type FeedbackPeriod,
+		type FeedbackRequest
 	} from '$lib/auth/auth';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -17,9 +22,38 @@
 	let savedId = $state<string | null>(null);
 	let search = $state('');
 
+	// --- Feedback request state ---
+	let periods = $state<FeedbackPeriod[]>([]);
+	let sentRequests = $state<FeedbackRequest[]>([]);
+	let requestingIds = $state<Set<string>>(new Set());
+	let requestNotes = $state<Record<string, string>>({});
+
 	const isAdmin = $derived(auth.user?.role === 'org_admin');
 	const managerNameById = $derived(
 		new Map(employees.map((e) => [e.id, e.name]))
+	);
+
+	// The active period: the one whose window contains now, falling back to
+	// the newest (list is already start_date desc).
+	const activePeriod = $derived.by(() => {
+		const now = Date.now();
+		return (
+			periods.find(
+				(p) =>
+					new Date(p.start_date).getTime() <= now && now <= new Date(p.end_date).getTime()
+			) ?? periods[0]
+		);
+	});
+	const activePeriodId = $derived(activePeriod?.id ?? '');
+
+	// Open requests I've sent, keyed by "<requestee>_<period>" so the row can
+	// show "Requested" instead of a second ask.
+	const openSentKeys = $derived(
+		new Set(
+			sentRequests
+				.filter((r) => r.status === 'open')
+				.map((r) => r.requestee_id + '_' + r.period_id)
+		)
 	);
 
 	// Case-insensitive filter over name, title, and email.
@@ -67,6 +101,16 @@
 			}
 			all.sort((a, b) => a.name.localeCompare(b.name));
 			employees = all;
+
+			// Load periods and the caller's sent requests so the row can show
+			// "Requested" for pending asks. Failures here are non-fatal: the
+			// request button is hidden rather than the page erroring.
+			const [periodsRes, sentRes] = await Promise.all([
+				listFeedbackPeriods(token).catch(() => null),
+				fetchAllRequests(token, 'sent').catch(() => [] as FeedbackRequest[])
+			]);
+			if (periodsRes) periods = periodsRes.periods;
+			sentRequests = sentRes;
 		} catch (err) {
 			if (err instanceof ApiClientError) {
 				switch (err.code) {
@@ -92,6 +136,90 @@
 			}
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function fetchAllRequests(
+		token: string,
+		direction: 'received' | 'sent'
+	): Promise<FeedbackRequest[]> {
+		const out: FeedbackRequest[] = [];
+		let cursor: string | null = null;
+		for (let i = 0; i < 50; i++) {
+			const page = await listMyFeedbackRequests(token, {
+				direction,
+				limit: 100,
+				cursor: cursor ?? undefined
+			});
+			out.push(...page.requests);
+			cursor = page.next_cursor;
+			if (!cursor) break;
+		}
+		return out;
+	}
+
+	async function handleRequestFeedback(employee: Employee) {
+		if (requestingIds.has(employee.id)) return;
+		if (!activePeriod) {
+			requestNotes = {
+				...requestNotes,
+				[employee.id]: 'No feedback period is open to request feedback in.'
+			};
+			return;
+		}
+		if (
+			!window.confirm(
+				`Ask ${employee.name} for feedback in the "${activePeriod.name}" cycle? They'll be notified by email.`
+			)
+		) {
+			return;
+		}
+		requestingIds = new Set([...requestingIds, employee.id]);
+		requestNotes = { ...requestNotes, [employee.id]: '' };
+		try {
+			const token = auth.token;
+			if (!token) {
+				await auth.logout();
+				goto('/login', { replaceState: true });
+				return;
+			}
+			const created = await createFeedbackRequest(token, {
+				requestee_id: employee.id,
+				period_id: activePeriod.id
+			});
+			sentRequests = [created, ...sentRequests];
+			requestNotes = {
+				...requestNotes,
+				[employee.id]: `Request sent — ${employee.name} will be notified.`
+			};
+		} catch (err) {
+			if (err instanceof ApiClientError) {
+				if (err.code === 'unauthorized') {
+					await auth.logout();
+					goto('/login', { replaceState: true });
+					return;
+				}
+				if (err.status === 409) {
+					requestNotes = {
+						...requestNotes,
+						[employee.id]: `You already have an open request for ${employee.name} in this cycle.`
+					};
+				} else {
+					requestNotes = {
+						...requestNotes,
+						[employee.id]: err.message || 'Could not send the request. Please try again.'
+					};
+				}
+			} else {
+				requestNotes = {
+					...requestNotes,
+					[employee.id]: 'Could not send the request. Please try again.'
+				};
+			}
+		} finally {
+			const next = new Set(requestingIds);
+			next.delete(employee.id);
+			requestingIds = next;
 		}
 	}
 
@@ -328,14 +456,14 @@
 				Clear search
 			</button>
 		</div>
-	{:else}
-		<div class="card table-card">
-			<div class="table-head grid-row">
-				<span>Member</span>
-				<span>Role</span>
-				<span>Joined</span>
-				<span>Manager</span>
-			</div>
+		{:else}
+			<div class="card table-card">
+				<div class="table-head grid-row">
+					<span>Member</span>
+					<span>Role</span>
+					<span>Joined</span>
+					<span>Manager</span>
+				</div>
 
 			{#each filteredEmployees as employee (employee.id)}
 				<div class="grid-row member-row">
@@ -351,20 +479,47 @@
 								{/if}
 							</div>
 							<div class="member-sub">{employee.title || employee.email}</div>
+							{#if auth.user?.id !== employee.id}
+								<div class="member-actions">
+									{#if openSentKeys.has(employee.id + '_' + activePeriodId)}
+										<span class="requested-chip" title="Waiting for their feedback">
+											<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+												<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+												<path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+											</svg>
+											Requested
+										</span>
+									{:else}
+										<button
+											type="button"
+											class="btn btn-ghost request-btn"
+											onclick={() => handleRequestFeedback(employee)}
+											disabled={requestingIds.has(employee.id) || !activePeriod}
+											title="Ask {employee.name} for feedback in the current cycle"
+										>
+											<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+												<path d="M21 11.5a8.5 8.5 0 01-8.5 8.5c-1.6 0-3.1-.4-4.4-1.2L3 20l1.2-5.1A8.5 8.5 0 1121 11.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+											</svg>
+											<span class="btn-label">Request feedback</span>
+										</button>
+									{/if}
+									<a
+										class="btn btn-secondary feedback-btn"
+										href="/app/feedback/new?reviewee={encodeURIComponent(employee.id)}"
+										title="Give feedback to {employee.name}"
+									>
+										<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+											<path d="M11 4H5a1 1 0 00-1 1v14a1 1 0 001 1h14a1 1 0 001-1v-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+											<path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+										</svg>
+										<span class="btn-label">Give feedback</span>
+									</a>
+								</div>
+								{#if requestNotes[employee.id]}
+									<div class="request-note">{requestNotes[employee.id]}</div>
+								{/if}
+							{/if}
 						</div>
-						{#if auth.user?.id !== employee.id}
-							<a
-								class="btn btn-secondary feedback-btn"
-								href="/app/feedback/new?reviewee={encodeURIComponent(employee.id)}"
-								title="Give feedback to {employee.name}"
-							>
-								<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-									<path d="M11 4H5a1 1 0 00-1 1v14a1 1 0 001 1h14a1 1 0 001-1v-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-									<path d="M18.5 2.5a2.1 2.1 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-								</svg>
-								<span class="btn-label">Give feedback</span>
-							</a>
-						{/if}
 					</div>
 
 					<div class="member-role">
@@ -596,12 +751,54 @@
 		min-width: 0;
 	}
 
+	.member-actions {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		margin-top: var(--space-2);
+	}
+
+	.request-btn {
+		padding: 4px 10px;
+		font-size: 12px;
+		gap: 5px;
+		height: 30px;
+		flex-shrink: 0;
+	}
+
+	.request-btn svg {
+		flex-shrink: 0;
+	}
+
+	.requested-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 10px;
+		height: 30px;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--color-primary);
+		background: var(--color-primary-soft);
+		border-radius: var(--radius-md);
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+
+	.request-note {
+		font-size: 12px;
+		color: var(--color-primary);
+		line-height: 1.4;
+		margin-top: var(--space-1);
+	}
+
 	.feedback-btn {
 		flex-shrink: 0;
-		margin-left: auto;
-		padding: 6px 11px;
+		padding: 4px 10px;
 		font-size: 12px;
-		gap: 6px;
+		gap: 5px;
+		height: 30px;
 	}
 
 	.feedback-btn svg {
@@ -791,8 +988,8 @@
 		.grid-row {
 			grid-template-columns: 1fr 1fr;
 			grid-template-areas:
-				'member role'
-				'joined joined'
+				'member member'
+				'role joined'
 				'manager manager';
 			row-gap: var(--space-3);
 		}
@@ -803,11 +1000,12 @@
 
 		.member-role {
 			grid-area: role;
-			justify-content: flex-end;
+			justify-content: flex-start;
 		}
 
 		.member-joined {
 			grid-area: joined;
+			justify-self: end;
 		}
 
 		.member-manager {
