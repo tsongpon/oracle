@@ -4,6 +4,7 @@
 		ApiClientError,
 		listEmployees,
 		listFeedbackPeriods,
+		listMyFeedbackRequests,
 		createFeedback,
 		createFeedbackDraft,
 		listMyFeedbackDrafts,
@@ -13,6 +14,7 @@
 		type CreateFeedbackDraftRequest,
 		type Employee,
 		type FeedbackPeriod,
+		type FeedbackRequest,
 		type FeedbackResponse,
 		type FeedbackVisibility,
 		type UpdateFeedbackDraftRequest
@@ -80,6 +82,11 @@
 	const currentUser = $derived(auth.user);
 	const editingDraft = $derived(drafts.find((d) => d.id === draftId) ?? null);
 	const otherDrafts = $derived(editingDraft ? drafts.filter((d) => d.id !== draftId) : drafts);
+
+	// An open request this form is fulfilling: when the page was opened with
+	// ?reviewee=<id> and that colleague has an open request to me, show a
+	// banner so the user knows their feedback completes the ask.
+	let matchingRequest = $state<FeedbackRequest | null>(null);
 
 	// --- Reviewee combobox state ---
 	let revieweeQuery = $state('');
@@ -173,11 +180,16 @@
 				goto('/login', { replaceState: true });
 				return;
 			}
-			// Fetch all employees (paginate), periods, and my drafts in parallel.
-			const [allEmployees, periodsRes, draftsRes] = await Promise.all([
+			// Fetch all employees (paginate), periods, my drafts, and my received
+			// requests in parallel. The requests feed the "completing X's request"
+			// banner when the page was opened from a request; an older backend
+			// without the endpoint must not break the form, so failures degrade
+			// to "no banner".
+			const [allEmployees, periodsRes, draftsRes, receivedRequests] = await Promise.all([
 				fetchAllEmployees(token),
 				listFeedbackPeriods(token),
-				fetchAllDrafts(token)
+				fetchAllDrafts(token),
+				fetchAllReceivedRequests(token).catch(() => [] as FeedbackRequest[])
 			]);
 			// Filter out the current user (no self-review, per spec).
 			employees = allEmployees.filter((e) => e.id !== currentUser?.id);
@@ -189,6 +201,11 @@
 			const requested = page.url.searchParams.get('reviewee');
 			if (requested && employees.some((e) => e.id === requested)) {
 				revieweeId = requested;
+				// Banner: is this colleague waiting on feedback from me?
+				matchingRequest =
+					receivedRequests.find(
+						(r) => r.status === 'open' && r.requester_id === requested
+					) ?? null;
 			} else if (requested) {
 				// Unknown or self ID — drop the stale param from the URL.
 				goto('/app/feedback/new', { replaceState: true, noScroll: true, keepFocus: true });
@@ -239,6 +256,22 @@
 		for (let i = 0; i < 50; i++) {
 			const page = await listMyFeedbackDrafts(token, { limit: 100, cursor: cursor ?? undefined });
 			out.push(...page.drafts);
+			cursor = page.next_cursor;
+			if (!cursor) break;
+		}
+		return out;
+	}
+
+	async function fetchAllReceivedRequests(token: string): Promise<FeedbackRequest[]> {
+		const out: FeedbackRequest[] = [];
+		let cursor: string | null = null;
+		for (let i = 0; i < 50; i++) {
+			const page = await listMyFeedbackRequests(token, {
+				direction: 'received',
+				limit: 100,
+				cursor: cursor ?? undefined
+			});
+			out.push(...page.requests);
 			cursor = page.next_cursor;
 			if (!cursor) break;
 		}
@@ -704,6 +737,11 @@
 	}
 
 	const reviewee = $derived(employees.find((e) => e.id === revieweeId));
+
+	/** Display name of the selected reviewee, for the request banner. */
+	function revieweeName(): string {
+		return reviewee?.name ?? 'your colleague';
+	}
 </script>
 
 <svelte:head>
@@ -829,6 +867,18 @@
 		{/if}
 
 		<form class="card form-card" onsubmit={handleSubmit} novalidate>
+			{#if matchingRequest && matchingRequest.period_id === periodId}
+				<div class="draft-banner request-banner">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+						<path d="M21 11.5a8.5 8.5 0 01-8.5 8.5c-1.6 0-3.1-.4-4.4-1.2L3 20l1.2-5.1A8.5 8.5 0 1121 11.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					<span>
+						You're completing <strong>{revieweeName()}</strong>'s feedback request — they asked you
+						for feedback in this cycle.
+					</span>
+				</div>
+			{/if}
+
 			{#if editingDraft}
 				<div class="draft-banner">
 					<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">

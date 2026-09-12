@@ -2,13 +2,16 @@
 	import { auth } from '$lib/auth.svelte';
 	import {
 		ApiClientError,
+		declineFeedbackRequest,
 		listEmployees,
 		listFeedbackPeriods,
 		listMyFeedbackDrafts,
+		listMyFeedbackRequests,
 		listMyFeedbacks,
 		listMyGivenFeedbacks,
 		type Employee,
 		type FeedbackPeriod,
+		type FeedbackRequest,
 		type FeedbackResponse
 	} from '$lib/auth/auth';
 	import { goto } from '$app/navigation';
@@ -24,6 +27,9 @@
 	let received = $state<FeedbackResponse[]>([]);
 	let given = $state<FeedbackResponse[]>([]);
 	let teammates = $state<Employee[]>([]);
+	let requestsReceived = $state<FeedbackRequest[]>([]);
+	let requestsSent = $state<FeedbackRequest[]>([]);
+	let requestBusy = $state<string | null>(null);
 
 	// The active period: the one whose window contains now. Falls back to the
 	// newest period (list is already start_date desc) so the dashboard always
@@ -60,6 +66,13 @@
 
 	// Newest received feedback for the dashboard panel.
 	const recentReceived = $derived(received.slice(0, 5));
+
+	// Open requests received: the teammate, the cycle, and a one-click path to
+	// write the requested feedback.
+	const openRequestsReceived = $derived(requestsReceived.filter((r) => r.status === 'open'));
+
+	// Requests sent recently (any status), newest first.
+	const recentRequestsSent = $derived(requestsSent.slice(0, 5));
 
 	const draftsCount = $derived(drafts.length);
 	const submittedThisCycle = $derived(
@@ -116,6 +129,46 @@
 		return teammates.find((t) => t.id === f.reviewer_id)?.name ?? 'A teammate';
 	}
 
+	function requesterName(r: FeedbackRequest): string {
+		return teammates.find((t) => t.id === r.requester_id)?.name ?? 'A teammate';
+	}
+
+	function requestStatusBadge(s: string): { label: string; cls: string } {
+		if (s === 'open') return { label: 'Open', cls: 'badge-req-open' };
+		if (s === 'completed') return { label: 'Completed', cls: 'badge-req-done' };
+		return { label: 'Declined', cls: 'badge-req-declined' };
+	}
+
+	async function handleDeclineRequest(id: string) {
+		if (requestBusy) return;
+		if (!window.confirm('Decline this feedback request? The requester will be able to ask again.')) {
+			return;
+		}
+		requestBusy = id;
+		try {
+			const token = auth.token;
+			if (!token) {
+				await auth.logout();
+				goto('/login', { replaceState: true });
+				return;
+			}
+			await declineFeedbackRequest(token, id);
+			requestsReceived = requestsReceived.map((r) =>
+				r.id === id ? { ...r, status: 'declined' as const } : r
+			);
+		} catch (err) {
+			if (err instanceof ApiClientError && err.code === 'unauthorized') {
+				await auth.logout();
+				goto('/login', { replaceState: true });
+				return;
+			}
+			// Non-fatal: the request stays open; the next dashboard load
+			// re-syncs with the server.
+		} finally {
+			requestBusy = null;
+		}
+	}
+
 	function excerptOf(f: FeedbackResponse): string {
 		return (f.strengths_comment || f.weaknesses_comment || '').slice(0, 140);
 	}
@@ -167,18 +220,26 @@
 				goto('/login', { replaceState: true });
 				return;
 			}
-			const [allEmployees, periodsRes, draftsRes, givenRes, receivedRes] = await Promise.all([
-				fetchAllEmployees(token),
-				listFeedbackPeriods(token),
-				fetchAllDrafts(token),
-				fetchAllGiven(token),
-				fetchAllReceived(token)
-			]);
+			const [allEmployees, periodsRes, draftsRes, givenRes, receivedRes, reqReceivedRes, reqSentRes] =
+				await Promise.all([
+					fetchAllEmployees(token),
+					listFeedbackPeriods(token),
+					fetchAllDrafts(token),
+					fetchAllGiven(token),
+					fetchAllReceived(token),
+					// Requests are a newer surface: an older backend without the
+					// endpoints must not break the dashboard, so failures
+					// degrade to "no requests" instead of erroring the page.
+					fetchAllRequests(token, 'received').catch(() => [] as FeedbackRequest[]),
+					fetchAllRequests(token, 'sent').catch(() => [] as FeedbackRequest[])
+				]);
 			teammates = allEmployees.filter((e) => e.id !== user.id);
 			periods = periodsRes.periods;
 			drafts = draftsRes;
 			given = givenRes;
 			received = receivedRes;
+			requestsReceived = reqReceivedRes;
+			requestsSent = reqSentRes;
 		} catch (err) {
 			if (err instanceof ApiClientError) {
 				if (err.code === 'unauthorized') {
@@ -237,6 +298,25 @@
 		for (let i = 0; i < 50; i++) {
 			const page = await listMyFeedbacks(token, { limit: 100, cursor: cursor ?? undefined });
 			out.push(...page.feedbacks);
+			cursor = page.next_cursor;
+			if (!cursor) break;
+		}
+		return out;
+	}
+
+	async function fetchAllRequests(
+		token: string,
+		direction: 'received' | 'sent'
+	): Promise<FeedbackRequest[]> {
+		const out: FeedbackRequest[] = [];
+		let cursor: string | null = null;
+		for (let i = 0; i < 50; i++) {
+			const page = await listMyFeedbackRequests(token, {
+				direction,
+				limit: 100,
+				cursor: cursor ?? undefined
+			});
+			out.push(...page.requests);
 			cursor = page.next_cursor;
 			if (!cursor) break;
 		}
@@ -303,13 +383,54 @@
 					<span class="stat-label">{stat.label}</span>
 					<span class="stat-dot tone-{stat.tone}" aria-hidden="true"></span>
 				</div>
-				<div class="stat-value">{stat.value}</div>
-				<div class="stat-hint">{stat.hint}</div>
-			</div>
-		{/each}
-	</section>
+			<div class="stat-value">{stat.value}</div>
+			<div class="stat-hint">{stat.hint}</div>
+		</div>
+	{/each}
+</section>
 
-	<section class="grid-2">
+{#if openRequestsReceived.length > 0}
+	<section class="panel card">
+		<div class="panel-head">
+			<div>
+				<h2 class="panel-title">Requests received</h2>
+				<p class="panel-sub">Teammates who asked you for feedback this cycle</p>
+			</div>
+			<span class="req-count-badge">{openRequestsReceived.length}</span>
+		</div>
+		<ul class="req-list">
+			{#each openRequestsReceived as r (r.id)}
+				<li class="req-item">
+					<div class="req-avatar" style="background:{colorFor(r.requester_id)}">
+						{initials(requesterName(r))}
+					</div>
+					<div class="req-meta">
+						<div class="req-name">{requesterName(r)}</div>
+						<div class="req-sub">
+							{periodLabel(r.period_id) || 'a feedback cycle'}
+							· asked {formatDate(r.created_at)}
+						</div>
+					</div>
+					<div class="req-actions">
+						<a class="btn btn-primary req-btn" href="/app/feedback/new?reviewee={encodeURIComponent(r.requester_id)}">
+							Write feedback
+						</a>
+						<button
+							type="button"
+							class="btn btn-ghost req-btn"
+							onclick={() => handleDeclineRequest(r.id)}
+							disabled={requestBusy === r.id}
+						>
+							Decline
+						</button>
+					</div>
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
+<section class="grid-2">
 		<div class="panel card">
 			<div class="panel-head">
 				<div>
@@ -431,6 +552,36 @@
 			</div>
 		{/if}
 	</section>
+
+	{#if recentRequestsSent.length > 0}
+		<section class="panel card">
+			<div class="panel-head">
+				<div>
+					<h2 class="panel-title">Requests you've sent</h2>
+					<p class="panel-sub">Feedback you've asked your teammates for</p>
+				</div>
+			</div>
+			<ul class="sent-req-list">
+				{#each recentRequestsSent as r (r.id)}
+					{@const badge = requestStatusBadge(r.status)}
+					<li class="sent-req-item">
+						<div class="req-avatar" style="background:{colorFor(r.requestee_id)}">
+							{initials(teammates.find((t) => t.id === r.requestee_id)?.name ?? '?')}
+						</div>
+						<div class="req-meta">
+							<div class="req-name">
+								{teammates.find((t) => t.id === r.requestee_id)?.name ?? 'A teammate'}
+							</div>
+							<div class="req-sub">
+								{periodLabel(r.period_id) || 'a feedback cycle'} · {formatDate(r.created_at)}
+							</div>
+						</div>
+						<span class="badge {badge.cls}">{badge.label}</span>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
 {/if}
 
 <style>
@@ -586,6 +737,11 @@
 
 	.panel {
 		padding: var(--space-6);
+		margin-bottom: var(--space-5);
+	}
+
+	.panel:last-child {
+		margin-bottom: 0;
 	}
 
 	.panel-head {
@@ -681,6 +837,116 @@
 		color: var(--color-text-muted);
 		font-size: 13px;
 		padding: var(--space-4) 0;
+	}
+
+	/* Requests received / sent */
+	.req-count-badge {
+		display: inline-grid;
+		place-items: center;
+		min-width: 28px;
+		height: 28px;
+		padding: 0 var(--space-2);
+		border-radius: var(--radius-full);
+		background: var(--color-primary);
+		color: #fff;
+		font-size: 13px;
+		font-weight: 700;
+	}
+
+	.req-list,
+	.sent-req-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+	}
+
+	.req-item,
+	.sent-req-item {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		padding: var(--space-3) var(--space-4);
+		background: var(--color-surface-2);
+		border-radius: var(--radius-md);
+	}
+
+	.req-avatar {
+		width: 36px;
+		height: 36px;
+		border-radius: 50%;
+		display: grid;
+		place-items: center;
+		color: #fff;
+		font-size: 12px;
+		font-weight: 700;
+		flex-shrink: 0;
+	}
+
+	.req-meta {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.req-name {
+		font-size: 14px;
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.req-sub {
+		font-size: 12px;
+		color: var(--color-text-subtle);
+		margin-top: 2px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.req-actions {
+		display: flex;
+		gap: var(--space-2);
+		flex-shrink: 0;
+	}
+
+	.req-btn {
+		height: 34px;
+		padding: 0 var(--space-3);
+		font-size: 12px;
+		white-space: nowrap;
+	}
+
+	.badge-req-open {
+		background: #eef2ff;
+		color: #4338ca;
+	}
+
+	.badge-req-done {
+		background: #e7f6ee;
+		color: #0f9d58;
+	}
+
+	.badge-req-declined {
+		background: var(--color-surface-2);
+		color: var(--color-text-muted);
+	}
+
+	@media (max-width: 640px) {
+		.req-item {
+			flex-wrap: wrap;
+		}
+
+		.req-actions {
+			width: 100%;
+		}
+
+		.req-actions .btn {
+			flex: 1;
+		}
 	}
 
 	/* Team list */

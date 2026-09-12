@@ -186,6 +186,30 @@ export interface FeedbackDraftListResponse {
 	next_cursor: string | null;
 }
 
+// --- Feedback request types (drop-in from OpenAPI §components/schemas) ---
+
+export type FeedbackRequestStatus = 'open' | 'completed' | 'declined';
+
+export interface FeedbackRequest {
+	id: string;
+	requester_id: string;
+	requestee_id: string;
+	period_id: string;
+	status: FeedbackRequestStatus;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateFeedbackRequestRequest {
+	requestee_id: string;
+	period_id: string;
+}
+
+export interface FeedbackRequestListResponse {
+	requests: FeedbackRequest[];
+	next_cursor: string | null;
+}
+
 // --- Error model ---
 
 export type AuthErrorCode =
@@ -486,6 +510,37 @@ export async function submitFeedbackDraft(
 	return request<FeedbackResponse>(`/feedback-drafts/${encodeURIComponent(id)}/submit`, {
 		method: 'POST',
 		body: payload,
+		token
+	});
+}
+
+// --- Feedback request endpoints ---
+
+export async function createFeedbackRequest(
+	token: string,
+	payload: CreateFeedbackRequestRequest
+): Promise<FeedbackRequest> {
+	return request<FeedbackRequest>('/feedback-requests', { method: 'POST', body: payload, token });
+}
+
+export async function listMyFeedbackRequests(
+	token: string,
+	options: { direction?: 'received' | 'sent'; limit?: number; cursor?: string } = {}
+): Promise<FeedbackRequestListResponse> {
+	const params = new URLSearchParams();
+	if (options.direction) params.set('direction', options.direction);
+	if (options.limit != null) params.set('limit', String(options.limit));
+	if (options.cursor) params.set('cursor', options.cursor);
+	const qs = params.toString();
+	return request<FeedbackRequestListResponse>(`/me/feedback-requests${qs ? `?${qs}` : ''}`, {
+		method: 'GET',
+		token
+	});
+}
+
+export async function declineFeedbackRequest(token: string, id: string): Promise<FeedbackRequest> {
+	return request<FeedbackRequest>(`/feedback-requests/${encodeURIComponent(id)}/decline`, {
+		method: 'POST',
 		token
 	});
 }
