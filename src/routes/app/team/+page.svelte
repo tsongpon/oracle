@@ -11,6 +11,7 @@
 		type FeedbackPeriod,
 		type FeedbackRequest
 	} from '$lib/auth/auth';
+	import { findActivePeriod } from '$lib/periods';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -33,17 +34,9 @@
 		new Map(employees.map((e) => [e.id, e.name]))
 	);
 
-	// The active period: the one whose window contains now, falling back to
-	// the newest (list is already start_date desc).
-	const activePeriod = $derived.by(() => {
-		const now = Date.now();
-		return (
-			periods.find(
-				(p) =>
-					new Date(p.start_date).getTime() <= now && now <= new Date(p.end_date).getTime()
-			) ?? periods[0]
-		);
-	});
+// The active period: the one whose window contains now, falling back to
+// the newest (list is already start_date desc).
+const activePeriod = $derived(findActivePeriod(periods) ?? periods[0]);
 	const activePeriodId = $derived(activePeriod?.id ?? '');
 
 	// Open requests I've sent, keyed by "<requestee>_<period>" so the row can

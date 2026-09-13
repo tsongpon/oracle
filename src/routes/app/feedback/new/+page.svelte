@@ -19,6 +19,7 @@
 		type FeedbackVisibility,
 		type UpdateFeedbackDraftRequest
 	} from '$lib/auth/auth';
+	import { findActivePeriod, isPeriodActive } from '$lib/periods';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
@@ -82,6 +83,20 @@
 	const currentUser = $derived(auth.user);
 	const editingDraft = $derived(drafts.find((d) => d.id === draftId) ?? null);
 	const otherDrafts = $derived(editingDraft ? drafts.filter((d) => d.id !== draftId) : drafts);
+
+	// The form is blocked unless a period's window is open right now — no
+	// point letting the user fill it in only to have the server reject it.
+	const activePeriod = $derived(findActivePeriod(periods));
+	const selectedPeriod = $derived(periods.find((p) => p.id === periodId) ?? null);
+	const periodOpen = $derived(selectedPeriod !== null && isPeriodActive(selectedPeriod));
+	// The nearest upcoming period, to tell the user when they can come back.
+	const nextPeriod = $derived.by(() => {
+		const now = Date.now();
+		const upcoming = periods
+			.filter((p) => new Date(p.start_date).getTime() > now)
+			.sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+		return upcoming[0] ?? null;
+	});
 
 	// An open request this form is fulfilling: when the page was opened with
 	// ?reviewee=<id> and that colleague has an open request to me, show a
@@ -195,8 +210,9 @@
 			employees = allEmployees.filter((e) => e.id !== currentUser?.id);
 			periods = periodsRes.periods;
 			drafts = draftsRes;
-			// Preselect the most recent period (list is already start_date desc).
-			if (periods.length > 0) periodId = periods[0].id;
+			// Preselect the active period; the form is blocked for closed/upcoming
+			// ones, so the fallback preselect of the newest period is not needed.
+			periodId = findActivePeriod(periods)?.id ?? '';
 			// Preselect the reviewee when linked from the team page (?reviewee=<id>).
 			const requested = page.url.searchParams.get('reviewee');
 			if (requested && employees.some((e) => e.id === requested)) {
@@ -525,6 +541,7 @@
 	function validate(): FieldErrors {
 		const errs: FieldErrors = {};
 		if (!periodId) errs.period_id = 'Select a feedback period.';
+		else if (!periodOpen) errs.period_id = 'This feedback period is not open for submission.';
 		if (!revieweeId) errs.reviewee_id = 'Choose a colleague to review.';
 		for (const f of SCORE_FIELDS) {
 			const v = scores[f.key];
@@ -695,7 +712,7 @@
 			trust_score: 0
 		};
 		visibility = 'anonymous';
-		if (periods.length > 0) periodId = periods[0].id;
+		periodId = findActivePeriod(periods)?.id ?? '';
 		fieldErrors = {};
 		formError = null;
 	}
@@ -805,7 +822,7 @@
 			</div>
 			<button type="button" class="btn btn-secondary" onclick={loadOptions}>Try again</button>
 		</div>
-	{:else if periods.length === 0}
+	{:else if !activePeriod}
 		<div class="card state-card">
 			<div class="empty-icon" aria-hidden="true">
 				<svg width="44" height="44" viewBox="0 0 48 48" fill="none">
@@ -813,8 +830,19 @@
 					<path d="M16 26l4 4 12-12" stroke="#8b94a6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
 				</svg>
 			</div>
-			<h2>No feedback periods open</h2>
-			<p class="state-text">Your organization hasn't opened a feedback period yet. Please check back later.</p>
+			{#if periods.length === 0}
+				<h2>No feedback periods open</h2>
+				<p class="state-text">Your organization hasn't opened a feedback period yet. Please check back later.</p>
+			{:else if nextPeriod}
+				<h2>No feedback period is currently open</h2>
+				<p class="state-text">
+					The next cycle, <strong>{nextPeriod.name}</strong>, opens on
+					{formatDate(nextPeriod.start_date)} — your feedback can be submitted then.
+				</p>
+			{:else}
+				<h2>No feedback period is currently open</h2>
+				<p class="state-text">All feedback periods have closed. Please check back later.</p>
+			{/if}
 			<a href="/app" class="btn btn-secondary">Back to dashboard</a>
 		</div>
 	{:else if employees.length === 0}

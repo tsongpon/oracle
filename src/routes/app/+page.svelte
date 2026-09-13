@@ -14,6 +14,7 @@
 		type FeedbackRequest,
 		type FeedbackResponse
 	} from '$lib/auth/auth';
+	import { findActivePeriod } from '$lib/periods';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -31,18 +32,10 @@
 	let requestsSent = $state<FeedbackRequest[]>([]);
 	let requestBusy = $state<string | null>(null);
 
-	// The active period: the one whose window contains now. Falls back to the
-	// newest period (list is already start_date desc) so the dashboard always
-	// has a cycle to show.
-	const activePeriod = $derived.by(() => {
-		const now = Date.now();
-		return (
-			periods.find(
-				(p) =>
-					new Date(p.start_date).getTime() <= now && now <= new Date(p.end_date).getTime()
-			) ?? periods[0]
-		);
-	});
+// The active period: the one whose window contains now. Falls back to the
+// newest period (list is already start_date desc) so the dashboard always
+// has a cycle to show.
+const activePeriod = $derived(findActivePeriod(periods) ?? periods[0]);
 
 	const activePeriodId = $derived(activePeriod?.id ?? '');
 
