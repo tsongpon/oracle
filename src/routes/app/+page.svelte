@@ -73,12 +73,27 @@ const activePeriod = $derived(findActivePeriod(periods) ?? periods[0]);
 	);
 	const receivedCount = $derived(received.length);
 
+	// Days remaining in the open period, for the stat card. Uses the strictly
+	// active period (not the dashboard fallback) so a closed newest period
+	// shows "—" instead of a negative number.
+	const openPeriod = $derived(findActivePeriod(periods));
+	const daysLeft = $derived.by(() => {
+		if (!openPeriod) return null;
+		return Math.max(
+			0,
+			Math.ceil((new Date(openPeriod.end_date).getTime() - Date.now()) / 86_400_000)
+		);
+	});
+	type StatTone = 'success' | 'warning' | 'muted';
+
 	const stats = $derived([
 		{
-			label: 'Pending to write',
-			value: pendingCount,
-			tone: 'warning' as const,
-			hint: activePeriod ? `Due ${formatDate(activePeriod.end_date)}` : 'No open period'
+			label: 'Days left in cycle',
+			value: daysLeft ?? '—',
+			tone: (openPeriod && daysLeft !== null && daysLeft <= 7
+				? 'warning'
+				: 'success') as StatTone,
+			hint: openPeriod ? `Ends ${formatDate(openPeriod.end_date)}` : 'No open period'
 		},
 		{
 			label: 'Drafts in progress',
