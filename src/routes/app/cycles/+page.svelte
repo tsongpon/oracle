@@ -6,6 +6,7 @@
 		createFeedbackPeriod,
 		type FeedbackPeriod
 	} from '$lib/auth/auth';
+	import { periodStatus } from '$lib/periods';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -180,15 +181,6 @@
 		} catch {
 			return iso;
 		}
-	}
-
-	function periodStatus(p: FeedbackPeriod): { label: string; cls: string } {
-		const now = Date.now();
-		const start = new Date(p.start_date).getTime();
-		const end = new Date(p.end_date).getTime();
-		if (now < start) return { label: 'Upcoming', cls: 'badge-warning' };
-		if (now > end) return { label: 'Closed', cls: 'badge-muted' };
-		return { label: 'Active', cls: 'badge-success' };
 	}
 
 	// Convert an ISO datetime-local input value to yyyy-MM-dd for the native
